@@ -1,0 +1,29 @@
+[project]
+name = "cspredict"
+version = "0.1.0"
+description = "Probabilistic enemy-position estimation for Counter-Strike 2 demo review"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "awpy>=2.0.2",
+    "demoparser2>=0.40",
+    "polars>=1.0",
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "matplotlib>=3.8",
+    "pyarrow>=14",
+    "pillow>=10",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

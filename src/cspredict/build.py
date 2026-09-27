@@ -1,0 +1,72 @@
+"""Fit the map grid, spotting model and motion models on the training demos.
+
+Usage:
+    python -m cspredict.build --sources xego          # writes data/maps/de_mirage/xego/
+    python -m cspredict.build --sources hltv xego     # pool several sources
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import time
+from dataclasses import dataclass
+from pathlib import Path
+
+from loguru import logger
+
+from cspredict.config import MAP_NAME, MAPS_DIR
+from cspredict.dataset import list_demos, load_ticks
+from cspredict.grid import NavGrid, build_grid
+from cspredict.motion import MotionModel, fit_motion_model
+from cspredict.particles import TrajectoryLibrary, build_library
+from cspredict.visibility import SpotModel, fit_spot_model
+
+
+@dataclass
+class Models:
+    grid: NavGrid
+    spot: SpotModel
+    motion: MotionModel
+    library: TrajectoryLibrary
+
+
+def model_dir(sources: list[str]) -> Path:
+    return MAPS_DIR / MAP_NAME / "+".join(sorted(sources))
+
+
+def load_models(path: Path) -> Models:
+    return Models(
+        grid=NavGrid.load(path / "grid.npz"),
+        spot=SpotModel.load(path / "spot.npz"),
+        motion=MotionModel.load(path / "motion.npz"),
+        library=TrajectoryLibrary.load(path / "library.npz"),
+    )
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description="Fit grid, spotting and motion models.")
+    ap.add_argument("--sources", nargs="+", default=["xego"], help="parsed data sources to train on")
+    args = ap.parse_args()
+
+    train = list_demos(args.sources, ["train"])
+    if not train:
+        raise SystemExit(f"No parsed training demos for {args.sources}; run `python -m cspredict.parse` first")
+    out = model_dir(args.sources)
+    out.mkdir(parents=True, exist_ok=True)
+    start = time.perf_counter()
+
+    logger.info(f"Building grid from {len(train)} training demos")
+    grid = build_grid(load_ticks(train, ["round_num", "tick", "steamid", "X", "Y", "Z", "is_alive", "place"]))
+    grid.save(out / "grid.npz")
+    logger.info(f"Grid: {grid.n} nodes, {len(grid.places)} callouts")
+
+    fit_spot_model(grid, train).save(out / "spot.npz")
+    fit_motion_model(grid, train).save(out / "motion.npz")
+    build_library(grid, train).save(out / "library.npz")
+    (out / "train_demos.json").write_text(json.dumps([r.demo_id for r in train], indent=2))
+    logger.info(f"Models written to {out} in {time.perf_counter() - start:.0f} s")
+
+
+if __name__ == "__main__":
+    main()
