@@ -62,7 +62,9 @@ The full tables, with 95% uncertainty ranges and every ablation, are in [docs/re
 - **A general-purpose AI can be coached, up to a point.** Given the same information, TypeSafe's Jev
   mostly repeats the last sighting. Facts computed in code plus movement rates from the training
   rounds lifted its top-3 from 61% to 70%, but its first guess stayed at "last seen" level, and a
-  9-number formula on the same facts beat it. See [docs/jev.md](docs/jev.md).
+  9-number formula on the same facts beat it. OpenAI's GPT-6 Luna, asked the same questions, did no
+  better: level with pushed Jev, still behind the formula, at 5 times the price and 50 times the wait.
+  See [docs/jev.md](docs/jev.md).
 
 ## How it works
 
@@ -109,7 +111,9 @@ python3.12 -m venv .venv                             # Python 3.11–3.13; awpy 
 - [docs/results.md](docs/results.md): all results, uncertainty ranges, each enhancement's effect,
   what mattered, and how it works step by step
 - [docs/data.md](docs/data.md): the data used, and how to add HLTV pro demos
-- [docs/jev.md](docs/jev.md): benchmark against TypeSafe's Jev, a general-purpose AI model
+- [docs/jev.md](docs/jev.md): benchmark against TypeSafe's Jev, a general-purpose AI model, and
+  against OpenAI's GPT-6 Luna on the same questions
+  ([protocol, written before the run](docs/frontier_protocol.md))
 - [prior_art.md](prior_art.md): related work
 
 ## Limitations

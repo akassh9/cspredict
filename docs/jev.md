@@ -75,6 +75,73 @@ python -m cspredict.jev_lab --split test --variants base reach_walk focus split 
 
 Answers are cached in `outputs/jev/`, and re-running only sends what is missing.
 
+## Jev against OpenAI's GPT-6 Luna, asked the same questions
+
+Is this a Jev problem, or does any AI that reads the moment as text hit the same wall? GPT-6 Luna is
+the cheapest GPT-6 model, so it is Jev's rival on price. It was asked exactly the questions Jev got:
+the same 2,000 validation and 3,000 test moments, with the requests built by the same code. The
+rules were written down before any GPT answer was collected; see
+[frontier_protocol.md](frontier_protocol.md). In short:
+- GPT saw each question in TypeSafe's format, with TypeSafe's own definitions of its question types,
+  and gave a probability for every option.
+- It ran at OpenAI's default reasoning setting ("medium"), with no tools and no web search.
+- Both models got the same calibration and the same blend with the formula, fitted on validation.
+- Ties get split credit for every model. The Jev lab counted them as misses, which cost Jev's plain
+  top-3 2.5 points (0.605 above, 0.630 here).
+- Two setups were chosen in advance, plain and split + movement rates, and the test moments were run
+  once.
+
+**Results on the 3,000 test moments** (calibrated; 95% intervals resample whole rounds):
+
+| | Callout top-1 | Top 3 | Log-loss | Picks the last-seen callout | Cost per 1,000 questions | Seconds per answer |
+|---|---|---|---|---|---|---|
+| **cspredict** (our model) | **0.489** (0.459–0.522) | **0.739** | **1.648** | 59% | | |
+| Formula: 9 weights on the facts + movement rates | 0.457 (0.425–0.490) | 0.710 | 1.819 | 75% | | |
+| GPT-6 Luna, split + movement rates | 0.432 (0.405–0.462) | 0.685 | 1.959 | 54% | $0.76 | 8.5 |
+| Jev, split + movement rates | 0.417 (0.387–0.449) | 0.708 | 1.944 | 40% | $0.14 | 0.16 |
+| Jev, plain | 0.407 (0.376–0.444) | 0.630 | 2.180 | 84% | $0.06 | 0.16 |
+| GPT-6 Luna, plain | 0.373 (0.346–0.400) | 0.626 | 2.141 | 54% | $0.48 | 6.5 |
+| "Where I last saw them" | 0.420 (0.388–0.455) | 0.586 | 7.150 | 100% | | |
+
+Seconds are medians: GPT's from the test run, Jev's from the 200 pilot requests. Costs use the list
+prices on 2026-09-28.
+
+What the numbers say:
+- **With Jev's best questions, the two are level.** Luna's first guess is 1.6 points better (−0.4
+  to +3.5). Jev's top 3 is 2.3 points better (0.7 to 3.9), and their log-loss differs by 0.015
+  (−0.039 to +0.070). Jev gets there about 50 times faster and at a fifth of the price. TypeSafe's own
+  evals also put the two about level; here that holds on real outcomes.
+- **From the plain description, Jev's first guess is better.** Luna names the right callout 3.4
+  points less often than Jev (1.2 to 5.7), and 4.7 points less often than "last seen" (2.0 to 7.4).
+  It leaves the last-seen callout too soon: in the 5 s after a sighting it is right 62% of the time,
+  against Jev's 68% and "last seen"'s 75%. Its percentages are a little more honest, but within noise
+  (log-loss −0.039, −0.087 to +0.009).
+- **Luna's reasoning helps only long after a sighting.** With the split questions, 40 s or more after
+  a sighting, Luna is right 22% of the time, against Jev's 18% and "last seen"'s 15%.
+- **Neither AI beats the formula.** Given the same facts, the 9-number formula also beats Luna, by
+  2.5 top-1 points (0.4 to 4.4) and 0.14 in log-loss. So the gap is not a Jev problem: at this price,
+  an AI reading the description does no better than a formula on the facts computed for it.
+- **Luna adds a little on top of the formula.**
+  - Blending 25% of its split answers into the formula improves log-loss by 0.017 (0.006 to 0.028).
+    For comparison, Jev's blend above improves it by 0.034.
+  - With the plain answers and the formula without movement rates, the blend improves log-loss by
+    0.064 (0.042 to 0.087) and top-1 by 1.1 points (0.2 to 2.0).
+- **Cost and speed:** all of Luna's runs (pilot, validation and test, 9,943 requests) cost $6.20,
+  with no failed answers.
+  - It thought for about 530 tokens per plain answer and 760 per split answer.
+  - It answered in a median 6.5–8.5 s, against 0.16 s for Jev.
+
+Reproduce with `pip install -e ".[bench]"` and `OPENAI_API_KEY` in the environment or `.env`. The
+Jev timing in the pilot also needs `TYPESAFE_API_KEY`. Then:
+
+```bash
+python -m cspredict.frontier_bench --pilot 100 --budget 2
+python -m cspredict.frontier_bench --split val --budget 4
+python -m cspredict.frontier_bench --split test --budget 6
+```
+
+Answers are cached in `outputs/frontier/`, and re-running only sends what is missing.
+
 ## First benchmark (the model before fires, team coordination and calibration)
 
 `typesafe_bench.py` asks [TypeSafe](https://docs.typesafe.ai/introduction)'s Jev (a hosted model that

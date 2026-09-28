@@ -1,5 +1,7 @@
 # Protocol: Jev against OpenAI's GPT-6 Luna, asked the same questions
 
+**Results:** [jev.md](jev.md#jev-against-openais-gpt-6-luna-asked-the-same-questions).
+
 Written on 2026-09-28, **before any GPT answer was collected**. The code is
 `src/cspredict/frontier_bench.py`. Any change made after the pilot is listed under
 [Changes](#changes) with its reason.
@@ -181,3 +183,11 @@ the wrapper or the settings:
 
   Zeros are floored at 1e-6 for both, as before, so raw log-loss punishes them and calibration can
   soften them.
+
+## The full runs
+
+The validation and test runs followed the protocol with no changes. The test moments were run once.
+- **Requests:** 9,943 in total (pilot, validation and test), with 0 failed or unusable answers.
+- **Cost:** $6.20, against the pilot's projection of $6.46.
+- **Fingerprint:** a hash of every request, taken before the validation run, was identical after it
+  and again after the test run.
