@@ -21,6 +21,7 @@ from scipy import sparse
 from cspredict.config import STEP_TICKS, TICKRATE
 from cspredict.dataset import DemoRef
 from cspredict.grid import NavGrid
+from cspredict.infostate import WEAPON_CLASSES, weapon_class_expr
 
 SIDES = ("t", "ct")
 PHASES = ("pre", "a", "b")  # bomb not planted / planted on A / planted on B
@@ -28,6 +29,7 @@ SINCE_EDGES = (2.0, 5.0, 10.0, 20.0)  # seconds since last spotted; last bin = n
 N_SINCE_BINS = len(SINCE_EDGES) + 2
 SMOOTH = 0.5  # pseudo-counts spread over a node and its neighbours (pooled matrices)
 SHRINK = 4.0  # pseudo-counts pulling a since-spotted matrix towards its pooled matrix
+SHRINK_WEAPON = 4.0  # pseudo-counts pulling a weapon-specific matrix towards its since-spotted matrix
 TIME_BIN_S = 5.0
 N_TIME_BINS = 36  # 0..180 s
 
@@ -50,8 +52,9 @@ def since_bin(since: float) -> int:
     return int(np.searchsorted(SINCE_EDGES, since, side="right"))
 
 
-def trans_key(side: str, phase: int, sbin: int) -> str:
-    return f"{context_key(side, phase)}_s{sbin}"
+def trans_key(side: str, phase: int, sbin: int, weapon: int = -1) -> str:
+    base = f"{context_key(side, phase)}_s{sbin}"
+    return base if weapon < 0 else f"{base}_w{weapon}"
 
 
 @dataclass
@@ -60,6 +63,11 @@ class MotionModel:
     random_walk: sparse.csr_matrix  # (N, N) lazy random walk, the untrained baseline
     spawn: dict[str, np.ndarray]  # side -> (N,) distribution when freeze time ends
     occupancy: dict[str, np.ndarray]  # context_key -> (N_TIME_BINS, N) where that side is by round time
+
+    def key(self, side: str, phase: int, sbin: int, weapon: int = -1) -> str:
+        """Transition key, conditioned on the weapon class when last seen if that matrix exists."""
+        k = trans_key(side, phase, sbin, weapon)
+        return k if k in self.trans else trans_key(side, phase, sbin)
 
     def save(self, path: Path) -> None:
         arrays = {}
@@ -95,12 +103,15 @@ def _normalize_rows(m: sparse.spmatrix) -> sparse.csr_matrix:
 
 
 def with_since_spotted(ticks: pl.DataFrame) -> pl.DataFrame:
-    """Add `since` = seconds since the player was last on the enemy radar this round (null if never)."""
+    """Add `since` = seconds since the player was last on the enemy radar this round (null if never)
+    and `seen_weapon` = the class of the weapon in their hands at that sighting (-1 if never)."""
     return (
         ticks.sort("round_num", "steamid", "tick")
         .with_columns(
             pl.when(pl.col("spotted")).then(pl.col("tick")).otherwise(None).forward_fill().over("round_num", "steamid")
-            .alias("last_spot")
+            .alias("last_spot"),
+            pl.when(pl.col("spotted")).then(weapon_class_expr()).otherwise(None).forward_fill().over("round_num", "steamid")
+            .fill_null(-1).alias("seen_weapon"),
         )  # fmt: skip
         .with_columns(((pl.col("tick") - pl.col("last_spot")) / TICKRATE).cast(pl.Float32).alias("since"))
         .drop("last_spot")
@@ -117,7 +128,7 @@ def _step_samples(grid: NavGrid, ref: DemoRef) -> pl.DataFrame:
     )
     node = grid.locate(ticks["X"].to_numpy(), ticks["Y"].to_numpy(), ticks["Z"].to_numpy())
     sbin = np.array([since_bin(v) for v in ticks["since"].fill_null(np.inf).to_numpy()], dtype=np.int8)
-    return ticks.select("round_num", "tick", "steamid", "side", "phase", "t_rel").with_columns(
+    return ticks.select("round_num", "tick", "steamid", "side", "phase", "t_rel", "seen_weapon").with_columns(
         pl.Series("node", node), pl.Series("sbin", sbin)
     )
 
@@ -147,8 +158,14 @@ def fit_motion_model(grid: NavGrid, refs: list[DemoRef]) -> MotionModel:
             ctx = moves.filter((pl.col("side") == side) & (pl.col("phase") == phase))
             pooled = _normalize_rows(counts(ctx) + smooth)
             for sbin in range(N_SINCE_BINS):
-                c = counts(ctx.filter(pl.col("sbin") == sbin))
-                trans[trans_key(side, phase, sbin)] = _normalize_rows(c + SHRINK * pooled)
+                in_bin = ctx.filter(pl.col("sbin") == sbin)
+                since_m = _normalize_rows(counts(in_bin) + SHRINK * pooled)
+                trans[trans_key(side, phase, sbin)] = since_m
+                if sbin == N_SINCE_BINS - 1:
+                    continue  # never seen: no weapon information
+                for w in range(len(WEAPON_CLASSES)):
+                    c = counts(in_bin.filter(pl.col("seen_weapon") == w))
+                    trans[trans_key(side, phase, sbin, w)] = _normalize_rows(c + SHRINK_WEAPON * since_m)
 
             s = samples.filter((pl.col("side") == side) & (pl.col("phase") == phase))
             tbin = np.minimum((s["t_rel"].to_numpy() // TIME_BIN_S).astype(np.int64), N_TIME_BINS - 1)

@@ -32,10 +32,11 @@ def test_hash_split_is_stable():
 
 @pytest.fixture(scope="module")
 def models():
-    path = model_dir(["xego"])
-    if not (path / "library.npz").exists():
-        pytest.skip("models not built; run `python -m cspredict.build`")
-    return load_models(path)
+    for sources in (["hltv", "xego"], ["xego"]):
+        path = model_dir(sources)
+        if (path / "library.npz").exists():
+            return load_models(path)
+    pytest.skip("models not built; run `python -m cspredict.build`")
 
 
 def test_grid_locate_roundtrip(models):
@@ -45,7 +46,7 @@ def test_grid_locate_roundtrip(models):
 
 
 def test_beliefs_are_distributions_and_collapse_on_sightings(models):
-    refs = list_demos(["xego"], ["test"])
+    refs = list_demos(None, ["test"])
     if not refs:
         pytest.skip("no parsed test demos")
     ep = next(episodes(models.grid, refs[0], "ct"))

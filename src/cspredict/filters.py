@@ -31,7 +31,7 @@ import numpy as np
 
 from cspredict.grid import NavGrid
 from cspredict.infostate import Episode
-from cspredict.motion import N_TIME_BINS, TIME_BIN_S, MotionModel, context_key, since_bin, trans_key
+from cspredict.motion import N_TIME_BINS, TIME_BIN_S, MotionModel, context_key, since_bin
 from cspredict.particles import TrajectoryLibrary, run_particles
 from cspredict.visibility import SpotModel
 
@@ -47,6 +47,10 @@ class FilterConfig:
     gamma: float = 1.0  # tempering of negative information; 1.0 was best on validation
     mix_hmm: float = 0.0  # weight of the hmm belief mixed into a particle belief
     mix_prior: float = 0.0  # weight of the prior_neg belief mixed into a particle belief
+    weapon: float = 1.0  # particles: weight for recorded states with another last-seen weapon class (1 = off)
+    weapon_mode: str = "all"  # which weapon classes to compare: "all", "guns" or "awp" (see particles.py)
+    hmm_weapon: bool = False  # grid motion also conditioned on the weapon class when last seen
+    seed: int = 0  # particle random seed (a second seed measures Monte Carlo noise)
 
 
 DEFAULT_CONFIGS = (
@@ -61,6 +65,18 @@ DEFAULT_CONFIGS = (
     FilterConfig("ens", "particles", negative=True, mix_hmm=0.15, mix_prior=0.10),
     FilterConfig("ens_nokill", "particles", negative=True, kills=False, mix_hmm=0.15, mix_prior=0.10),
 )
+_ENS = FilterConfig("ens", "particles", negative=True, mix_hmm=0.15, mix_prior=0.10)
+# Variants scored only when named (evaluate --models), for validation ablations.
+ABLATIONS: tuple[FilterConfig, ...] = (
+    *(replace(_ENS, name=f"ens_w{w}", weapon=w) for w in (0.7, 0.5, 0.3)),
+    FilterConfig("hmm_weapon", "learned", negative=True, hmm_weapon=True),
+    replace(_ENS, name="ens_hmmw", hmm_weapon=True),
+    replace(_ENS, name="ens_w0.5_hmmw", weapon=0.5, hmm_weapon=True),
+    replace(_ENS, name="ens_seed1", seed=1),
+    *(replace(_ENS, name=f"ens_awp{w}", weapon=w, weapon_mode="awp") for w in (0.5, 0.3)),
+    replace(_ENS, name="ens_guns0.5", weapon=0.5, weapon_mode="guns"),
+)
+ALL_CONFIGS = DEFAULT_CONFIGS + ABLATIONS
 
 
 @dataclass
@@ -107,6 +123,7 @@ def run_filter(
     n_e = len(ep.enemy_ids)
     b = np.tile(motion.spawn[ep.enemy].astype(np.float64), (n_e, 1))
     last_seen_t = np.full(n_e, np.inf)  # round time of each enemy's latest sighting
+    last_weapon = np.full(n_e, -1)  # weapon class in hand at that sighting
     for s in range(ep.n_steps):
         phase = int(ep.phase[s])
         if cfg.motion == "prior":
@@ -122,7 +139,10 @@ def run_filter(
         elif s > 0 and cfg.motion == "learned":
             # Each enemy moves by the matrix for how long ago they were last seen.
             since = ep.t_rel[s - 1] - last_seen_t
-            keys = [trans_key(ep.enemy, phase, since_bin(v)) for v in since]
+            keys = [
+                motion.key(ep.enemy, phase, since_bin(v), int(w) if cfg.hmm_weapon else -1)
+                for v, w in zip(since, last_weapon)
+            ]
             for key in set(keys):
                 rows = [e for e, k in enumerate(keys) if k == key]
                 b[rows] = np.asarray(b[rows] @ motion.trans[key])
@@ -137,6 +157,7 @@ def run_filter(
             b[e] = 0.0
             b[e, seen[e]] = 1.0
             last_seen_t[e] = ep.t_rel[s]
+            last_weapon[e] = ep.enemy_seen_weapon[s, e]
         b = (1 - FLOOR) * b + FLOOR / grid.n
         yield s, b
 
@@ -145,8 +166,9 @@ def _run_particle_filter(ep, grid, motion, cfg, ev, library) -> Iterator[tuple[i
     if library is None:
         raise ValueError("particle filters need a TrajectoryLibrary")
     particles = run_particles(
-        ep, grid, library, ev.unseen if cfg.negative else None, cfg.gamma, kills=ev.kills if cfg.kills else None
-    )
+        ep, grid, library, ev.unseen if cfg.negative else None, cfg.gamma,
+        kills=ev.kills if cfg.kills else None, weapon_mismatch=cfg.weapon, weapon_mode=cfg.weapon_mode, seed=cfg.seed,
+    )  # fmt: skip
     if cfg.mix_hmm <= 0 and cfg.mix_prior <= 0:
         for s, b in particles:
             yield s, (1 - FLOOR) * b + FLOOR / grid.n

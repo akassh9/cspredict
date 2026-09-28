@@ -23,7 +23,7 @@ from scipy import sparse
 from cspredict.config import STEP_TICKS, TICKRATE
 from cspredict.dataset import DemoRef
 from cspredict.grid import NavGrid
-from cspredict.infostate import Episode, buy_type
+from cspredict.infostate import OTHER_WEAPON, WEAPON_CLASSES, Episode, buy_type
 from cspredict.motion import phase_expr, with_since_spotted
 
 SIDE_ID = {"t": 0, "ct": 1}
@@ -37,10 +37,17 @@ SINCE_MISMATCH = 0.05  # weight for seen-before vs never-seen mismatches
 # Situation matching, tuned on validation (FACEIT data): a soft buy preference helped; matching
 # the numbers alive (even softly) and preferring the same player did not, so both are off.
 # Re-test them on pro demos, where teams are coordinated and the same players recur.
+# Matching the weapon in hand at the last sighting (all classes, guns only, or AWP vs not) was
+# within Monte Carlo noise on pro validation demos, so it is off too.
 BUY_MISMATCH = 0.7  # weight per step of buy difference (eco / force / full)
 ALIVE_SIGMA = np.inf  # players; how closely the numbers alive on each side must match
 SAME_PLAYER = 1.0  # weight boost for the same player's own recorded trajectories
+# Weight for recorded states whose weapon at their last sighting differs in class (sniper / rifle /
+# smg / pistol / other) from the enemy's weapon when last seen. 1.0 turns weapon matching off; the
+# filter configs set their own value (FilterConfig.weapon).
+WEAPON_MISMATCH = 1.0
 N_PARTICLES = 512
+SNIPER = WEAPON_CLASSES.index("sniper")
 
 
 @dataclass(frozen=True)
@@ -54,6 +61,7 @@ class Situation:
     n_opp: int  # players alive on the friendly side
     buy: int  # the enemy team's buy this round
     player: int  # the enemy's steamid
+    weapon: int = -1  # WEAPON_CLASSES index of the weapon in hand when last seen, -1 if never seen
 
 
 @dataclass
@@ -66,6 +74,7 @@ class TrajectoryLibrary:
     n_opp: np.ndarray  # (L,) players alive on the other side
     buy: np.ndarray  # (L,) that player's team buy this round
     player: np.ndarray  # (L,) steamid
+    weapon: np.ndarray  # (L,) weapon class in hand at that player's last sighting, -1 if not yet seen
     side: np.ndarray  # (L,) 0 = T, 1 = CT
     nxt: np.ndarray  # (L,) next state of the same trajectory, -1 at its end
     vel: np.ndarray  # (L, 2) displacement over the previous step
@@ -79,7 +88,9 @@ class TrajectoryLibrary:
     @classmethod
     def load(cls, path: Path) -> TrajectoryLibrary:
         with np.load(path) as z:
-            return cls(**{k: z[k] for k in cls.__dataclass_fields__})
+            fields = {k: z[k] for k in cls.__dataclass_fields__ if k in z.files}
+        fields.setdefault("weapon", np.full(len(fields["node"]), -1, dtype=np.int8))  # libraries built before weapons
+        return cls(**fields)
 
     @property
     def n_nodes(self) -> int:
@@ -112,6 +123,8 @@ class TrajectoryLibrary:
         sit: Situation,
         k: int,
         heading: np.ndarray | None = None,
+        weapon_mismatch: float = WEAPON_MISMATCH,
+        weapon_mode: str = "all",
     ) -> np.ndarray:
         """k recorded states resembling the enemy's node, heading and situation."""
         cand = self.candidates(grid, side, node)
@@ -124,6 +137,8 @@ class TrajectoryLibrary:
         w *= np.exp(-0.5 * alive_gap / ALIVE_SIGMA**2)
         w *= BUY_MISMATCH ** np.abs(self.buy[cand].astype(np.int64) - sit.buy)
         w *= np.where(self.player[cand] == sit.player, SAME_PLAYER, 1.0)
+        if sit.weapon >= 0 and weapon_mismatch != 1.0:
+            w *= _weapon_weight(self.weapon[cand], sit.weapon, weapon_mismatch, weapon_mode)
         if heading is not None:
             speed = np.hypot(*heading)
             v = self.vel[cand]
@@ -148,6 +163,19 @@ def _since_weight(lib_since: np.ndarray, since: float) -> np.ndarray:
         return np.where(lib_never, 1.0, SINCE_MISMATCH)
     gap = (np.log1p(np.where(lib_never, 0.0, lib_since)) - np.log1p(since)) / SINCE_SIGMA
     return np.where(lib_never, SINCE_MISMATCH, np.exp(-0.5 * gap**2))
+
+
+def _weapon_weight(lib_weapon: np.ndarray, weapon: int, mismatch: float, mode: str = "all") -> np.ndarray:
+    """1 for recorded states whose last-seen weapon class matches (or is unknown), else `mismatch`.
+    mode "all" compares every class; "guns" treats a knife, grenade or bomb in hand as unknown;
+    "awp" only compares sniper against not-sniper (also ignoring knife, grenade or bomb)."""
+    if mode == "all":
+        return np.where((lib_weapon < 0) | (lib_weapon == weapon), 1.0, mismatch)
+    if weapon == OTHER_WEAPON:
+        return np.ones(len(lib_weapon))
+    unknown = (lib_weapon < 0) | (lib_weapon == OTHER_WEAPON)
+    same = (lib_weapon == SNIPER) == (weapon == SNIPER) if mode == "awp" else lib_weapon == weapon
+    return np.where(unknown | same, 1.0, mismatch)
 
 
 def team_context(ticks: pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame]:
@@ -186,7 +214,7 @@ def build_library(grid: NavGrid, refs: list[DemoRef]) -> TrajectoryLibrary:
                 pl.col("since").fill_null(np.inf),
                 phase_expr(),
                 pl.col("n_team").fill_null(0).cast(pl.Int8), pl.col("n_opp").fill_null(0).cast(pl.Int8),
-                pl.col("buy").fill_null(2).cast(pl.Int8),
+                pl.col("buy").fill_null(2).cast(pl.Int8), pl.col("seen_weapon").cast(pl.Int8),
             )  # fmt: skip
         )
     df = pl.concat(frames).sort("demo", "round_num", "steamid", "tick")
@@ -213,7 +241,8 @@ def build_library(grid: NavGrid, refs: list[DemoRef]) -> TrajectoryLibrary:
     return TrajectoryLibrary(
         node=node, t=df["t"].to_numpy(), since=df["since"].to_numpy().astype(np.float32),
         phase=df["phase"].to_numpy(), n_team=df["n_team"].to_numpy(), n_opp=df["n_opp"].to_numpy(),
-        buy=df["buy"].to_numpy(), player=df["steamid"].to_numpy(), side=side, nxt=nxt, vel=vel,
+        buy=df["buy"].to_numpy(), player=df["steamid"].to_numpy(), weapon=df["seen_weapon"].to_numpy(),
+        side=side, nxt=nxt, vel=vel,
         starts=np.flatnonzero(~has_prev).astype(np.int32), bucket_ptr=ptr, bucket_idx=order,
     )  # fmt: skip
 
@@ -230,34 +259,38 @@ def run_particles(
     lib: TrajectoryLibrary,
     unseen: np.ndarray | None,
     gamma: float,
-    n_particles: int = N_PARTICLES,
+    n_particles: int | None = None,
     seed: int = 0,
     kills: dict[int, list[tuple[int, np.ndarray]]] | None = None,
+    weapon_mismatch: float = WEAPON_MISMATCH,
+    weapon_mode: str = "all",
 ):
     """Yield (step, beliefs (E, N)) like filters.run_filter. `kills` maps a step to
-    (enemy, likelihood over nodes) pairs from the kill feed."""
+    (enemy, likelihood over nodes) pairs from the kill feed; `weapon_mismatch` weights recorded
+    states whose last-seen weapon class differs from the enemy's."""
     rng = np.random.default_rng(seed)
     side = SIDE_ID[ep.enemy]
-    n_e, m = len(ep.enemy_ids), n_particles
+    n_e, m = len(ep.enemy_ids), n_particles or N_PARTICLES  # read at call time so overrides apply
     idx = np.stack([lib.sample_starts(rng, side, m) for _ in range(n_e)])
     w = np.full((n_e, m), 1.0 / m)
     last_seen_step = np.full(n_e, -10)
     last_seen_t = np.full(n_e, np.inf)
     last_seen_xy = np.full((n_e, 2), np.nan)
+    last_seen_weapon = np.full(n_e, -1)
     spread = sparse.diags(1.0 / np.maximum(np.diff(grid.adj_indptr), 1)) @ grid.adjacency
 
     def situation(e: int, s: int, since: float) -> Situation:
         return Situation(
             t=float(ep.t_rel[s]), phase=int(ep.phase[s]), since=since,
             n_team=int(ep.enemy_alive[s].sum()), n_opp=int(ep.obs_alive[s].sum()),
-            buy=ep.enemy_buy, player=int(ep.enemy_ids[e]),
+            buy=ep.enemy_buy, player=int(ep.enemy_ids[e]), weapon=int(last_seen_weapon[e]),
         )  # fmt: skip
 
     def rematch(e: int, which: np.ndarray, s: int) -> None:
         sit = situation(e, s, float(ep.t_rel[s] - last_seen_t[e]))
         for node in np.unique(lib.node[idx[e, which]]):
             sel = which[lib.node[idx[e, which]] == node]
-            idx[e, sel] = lib.sample(grid, rng, side, int(node), sit, len(sel), lib.vel[idx[e, sel[0]]])
+            idx[e, sel] = lib.sample(grid, rng, side, int(node), sit, len(sel), lib.vel[idx[e, sel[0]]], weapon_mismatch, weapon_mode)
 
     for s in range(ep.n_steps):
         if s > 0:
@@ -276,7 +309,9 @@ def run_particles(
         for e in np.flatnonzero(ep.enemy_seen_node[s] >= 0):
             xy = ep.enemy_seen_xyz[s, e, :2]
             heading = (xy - last_seen_xy[e]) / (s - last_seen_step[e]) if s - last_seen_step[e] <= 2 else None
-            idx[e] = lib.sample(grid, rng, side, int(ep.enemy_seen_node[s, e]), situation(e, s, 0.0), m, heading)
+            last_seen_weapon[e] = ep.enemy_seen_weapon[s, e]
+            sit = situation(e, s, 0.0)
+            idx[e] = lib.sample(grid, rng, side, int(ep.enemy_seen_node[s, e]), sit, m, heading, weapon_mismatch, weapon_mode)
             w[e] = 1.0 / m
             last_seen_step[e], last_seen_t[e], last_seen_xy[e] = s, ep.t_rel[s], xy
         ess = 1.0 / (w**2).sum(axis=1)

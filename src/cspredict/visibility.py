@@ -318,7 +318,10 @@ def fit_spot_model(grid: NavGrid, refs: list[DemoRef]) -> SpotModel:
             })  # fmt: skip
         )
     feats = pl.concat(feats)
-    agg = feats.group_by("cls", "dbin", "obin", "vbin").agg(pl.len().alias("n"), pl.col("hit").sum().alias("k"))
+    agg = (
+        feats.group_by("cls", "dbin", "obin", "vbin").agg(pl.len().alias("n"), pl.col("hit").sum().alias("k"))
+        .sort("cls", "dbin", "obin", "vbin")  # group order is random; a fixed order makes the fit reproducible
+    )  # fmt: skip
     a, b, c = _fit_logit_tables(*(agg[col].to_numpy() for col in ("cls", "dbin", "obin", "vbin", "n", "k")))
     model = SpotModel(walk=walk, carve=carve, a=a, b=b, c=c, factor=np.ones((grid.n, grid.n), np.float16))
 

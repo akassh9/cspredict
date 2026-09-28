@@ -20,10 +20,27 @@ from cspredict.grid import NavGrid
 
 BUY_EDGES = (1500.0, 3800.0)  # team mean equipment value when freeze time ends
 
+# The weapon in an enemy's hands is visible whenever they are seen (and called out: "AWP mid").
+# Shotguns and machine guns are grouped with SMGs: together they are 0.1% of sightings.
+WEAPON_CLASSES = ("sniper", "rifle", "smg", "pistol", "other")  # other: knife, grenade or bomb in hand
+_WEAPONS = (
+    ("AWP", "SSG 08", "SCAR-20", "G3SG1"),
+    ("AK-47", "M4A1-S", "M4A4", "Galil AR", "FAMAS", "AUG", "SG 553"),
+    ("MP9", "MAC-10", "MP7", "MP5-SD", "UMP-45", "P90", "PP-Bizon", "MAG-7", "XM1014", "Nova", "Sawed-Off", "M249", "Negev"),
+    ("Glock-18", "USP-S", "P2000", "P250", "Five-SeveN", "Tec-9", "CZ75-Auto", "Desert Eagle", "R8 Revolver", "Dual Berettas"),
+)
+WEAPON_CLASS = {name: k for k, names in enumerate(_WEAPONS) for name in names}
+OTHER_WEAPON = len(_WEAPONS)
+
 
 def buy_type(mean_equip: float) -> int:
     """0 eco (incl. pistol rounds), 1 force / half buy, 2 full buy."""
     return int(np.searchsorted(BUY_EDGES, mean_equip, side="right"))
+
+
+def weapon_class_expr(col: str = "weapon") -> pl.Expr:
+    """Index into WEAPON_CLASSES of the active weapon's name."""
+    return pl.col(col).replace_strict(WEAPON_CLASS, default=OTHER_WEAPON, return_dtype=pl.Int8)
 
 
 @dataclass
@@ -48,6 +65,7 @@ class Episode:
     enemy_seen: np.ndarray  # (S, E) on the friendly radar at some sample within the step
     enemy_seen_node: np.ndarray  # (S, E) node where last seen within the step, -1 if unseen
     enemy_seen_xyz: np.ndarray  # (S, E, 3) position where last seen within the step, NaN if unseen
+    enemy_seen_weapon: np.ndarray  # (S, E) WEAPON_CLASSES index of the weapon in hand when seen, -1 if unseen
     enemy_node: np.ndarray  # (S, E) true node (scoring only)
     enemy_xyz: np.ndarray  # (S, E, 3) true position (scoring and drawing only)
     smokes: list[np.ndarray]  # per step, (k, 2) centres of active smokes
@@ -100,6 +118,7 @@ def episodes(grid: NavGrid, ref: DemoRef, friendly: str) -> Iterator[Episode]:
     blinds = ref.table("blinds")
     kills = ref.table("kills")
 
+    ticks = ticks.with_columns(weapon_class_expr().alias("wclass"))
     for r in rounds.iter_rows(named=True):
         rt = ticks.filter(pl.col("round_num") == r["round_num"])
         if rt.height == 0:
@@ -117,7 +136,7 @@ def episodes(grid: NavGrid, ref: DemoRef, friendly: str) -> Iterator[Episode]:
             continue
 
         f = _dense(rt, obs_ids, tick_index, ["X", "Y", "Z", "yaw", "pitch", "is_alive"])
-        e = _dense(rt, enemy_ids, tick_index, ["X", "Y", "Z", "is_alive", "spotted"])
+        e = _dense(rt, enemy_ids, tick_index, ["X", "Y", "Z", "is_alive", "spotted", "wclass"])
         exyz = np.stack([e["X"], e["Y"], e["Z"]], axis=-1)
         enode = np.full(e["X"].shape, -1, dtype=np.int32)
         ok = np.isfinite(exyz).all(axis=-1)
@@ -128,6 +147,8 @@ def episodes(grid: NavGrid, ref: DemoRef, friendly: str) -> Iterator[Episode]:
         seen_now, seen_prev = e["spotted"][si] & e["is_alive"][si], e["spotted"][prev] & e["is_alive"][prev]
         seen_node = np.where(seen_now, enode[si], np.where(seen_prev, enode[prev], -1))
         seen_xyz = np.where(seen_now[..., None], exyz[si], np.where(seen_prev[..., None], exyz[prev], np.nan))
+        wclass = np.nan_to_num(e["wclass"], nan=OTHER_WEAPON).astype(np.int8)
+        seen_weapon = np.where(seen_now, wclass[si], np.where(seen_prev, wclass[prev], -1))
 
         blind = np.zeros((len(si), len(obs_ids)), dtype=bool)
         for b in blinds.filter(pl.col("round_num") == r["round_num"]).iter_rows(named=True):
@@ -179,6 +200,7 @@ def episodes(grid: NavGrid, ref: DemoRef, friendly: str) -> Iterator[Episode]:
             enemy_seen=seen_node >= 0,
             enemy_seen_node=seen_node.astype(np.int32),
             enemy_seen_xyz=seen_xyz.astype(np.float32),
+            enemy_seen_weapon=seen_weapon.astype(np.int8),
             enemy_node=enode[si],
             enemy_xyz=exyz[si],
             smokes=step_smokes,
