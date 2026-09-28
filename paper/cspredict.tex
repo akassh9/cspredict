@@ -98,7 +98,7 @@ Our system, \cs, addresses these points with a factored Bayes filter: one belief
   \item A formulation of opponent tracking from team-level information in CS2, with an information state restricted to what the team could know, and an evaluation protocol based on proper scoring rules, round-level bootstrap intervals and paired comparisons (\cref{sec:problem,sec:setup}).
   \item A complete filter learned from demo files alone. It needs no map geometry and combines a logistic spotting model for negative information with a trajectory-library particle filter conditioned on the time since the last sighting (\cref{sec:method}).
   \item A coordination correction that sums over every pairing between tracked opponents and recorded team snapshots, and a calibration that depends on the forecast horizon. We show why the former must wait for first contact and why the latter must depend on the horizon (\cref{sec:team,sec:calibration,sec:discussion}).
-  \item An empirical study on 16 held-out professional matches, with ablations of every component, features that did \emph{not} help, and a comparison with a general-purpose model queried through text descriptions (\cref{sec:results}).
+  \item An empirical study on 16 held-out professional matches, with ablations of every component, features that did \emph{not} help, and comparisons with two general-purpose models queried through text descriptions (\cref{sec:results}).
 \end{itemize}
 
 The intended use is post-match analysis. Used live during a match, a tool like this would give players information they are not entitled to, which competitive platforms forbid (\cref{sec:limitations}).
@@ -625,13 +625,13 @@ We report these because each was a plausible hypothesis, and several are feature
   \item \textbf{Smoke timing.} Fixing the parsing bug that cut 15\% of smokes 4\,s short initially made results slightly worse. It helped only once smokes were also treated as see-through for their last 1.5\,s, which matches when spotting through them resumes in the data.
 \end{itemize}
 
-\subsection{Comparison with a general-purpose model}
+\subsection{Comparison with general-purpose models}
 \label{sec:jev}
-Can a general-purpose model do the same job given the same information? We queried TypeSafe's Jev (\texttt{jev-1.13.0}; \citealp{typesafe2026}), a hosted model that answers multiple-choice questions posed as text with a probability for every option. For each hidden enemy it was asked which of the 23 callouts the enemy is in. It received a structured description of only what the team knew, and it never saw later events, true positions or our model's beliefs. Facts computed in code were labelled as such: travel times from the last sighting, spotting coverage per callout, and base rates from the \emph{training} rounds. Every variant was developed on 2{,}000 validation moments; then all variants were run once on 3{,}000 test moments. Calibration, blend weights and a simple baseline formula were fitted on validation.
+Can a general-purpose model do the same job given the same information? We queried TypeSafe's Jev (\texttt{jev-1.13.0}; \citealp{typesafe2026}), a hosted model that answers multiple-choice questions posed as text with a probability for every option. For each hidden enemy it was asked which of the 23 callouts the enemy is in. It received a structured description of only what the team knew, and it never saw later events, true positions or our model's beliefs. Facts computed in code were labelled as such: travel times from the last sighting, spotting coverage per callout, and base rates from the \emph{training} rounds. Every variant was developed on 2{,}000 validation moments; then all variants were run once on 3{,}000 test moments. Calibration, blend weights and a simple baseline formula were fitted on validation. Both models in this section round their probabilities (Jev to 0.01), so options tied with the true callout share its top-1 and top-3 credit, as if ties were broken at random. For the filters' continuous probabilities this gives the same numbers as the rule of \cref{sec:setup}. The only change is 0.2 points in \model{LastSeen}'s top-3.
 
 \begin{table}[t]
 \centering
-\caption{A general-purpose model on 3{,}000 held-out professional moments (a random subset of the test samples). The last column is how often the top pick is the callout where the enemy was last seen; the enemy really was still there in 42\% of these moments.}
+\caption{General-purpose models on 3{,}000 held-out professional moments (a random subset of the test samples). The last column is how often the top pick is the callout where the enemy was last seen; the enemy really was still there in 42\% of these moments. Tied options share credit (see text).}
 \label{tab:jev}
 \small
 \begin{tabular}{@{}lcccc@{}}
@@ -639,20 +639,29 @@ Can a general-purpose model do the same job given the same information? We queri
 Model & Callout top-1 & Top-3 & Log-loss & Picks last-seen callout \\
 \midrule
 \cs{} (\model{Ens}) & \textbf{0.489} \ci{0.459}{0.522} & \textbf{0.739} & \textbf{1.648} & 59\% \\
-Formula: 9 weights on the same facts, no Jev & 0.457 \ci{0.425}{0.490} & 0.710 & 1.819 & 75\% \\
-Jev, split questions + movement rates, calibrated & 0.416 \ci{0.387}{0.449} & 0.703 & 1.944 & 40\% \\
-Jev, split questions, calibrated & 0.416 & 0.683 & 2.023 & 75\% \\
-Jev, focused per-enemy questions, calibrated & 0.419 & 0.642 & 2.038 & 86\% \\
-Jev, plain description + travel times, calibrated & 0.404 & 0.629 & 2.182 & 76\% \\
-Jev, plain description, calibrated & 0.406 \ci{0.375}{0.443} & 0.605 & 2.180 & 84\% \\
-Jev, plain description, raw & 0.406 & 0.605 & 4.066 & 84\% \\
-\model{LastSeen} & 0.420 \ci{0.388}{0.455} & 0.584 & 7.150 & 100\% \\
+Formula: 9 weights on the same facts, no AI & 0.457 \ci{0.425}{0.490} & 0.710 & 1.819 & 75\% \\
+\midrule
+\multicolumn{5}{@{}l}{\emph{Jev (TypeSafe)}} \\
+\quad split questions + movement rates, calibrated & 0.417 \ci{0.387}{0.449} & 0.708 & 1.944 & 40\% \\
+\quad split questions, calibrated & 0.416 & 0.686 & 2.023 & 75\% \\
+\quad focused per-enemy questions, calibrated & 0.419 & 0.666 & 2.038 & 86\% \\
+\quad plain description + travel times, calibrated & 0.405 & 0.636 & 2.182 & 76\% \\
+\quad plain description, calibrated & 0.407 \ci{0.376}{0.444} & 0.630 & 2.180 & 84\% \\
+\quad plain description, raw & 0.407 & 0.630 & 4.066 & 84\% \\
+\midrule
+\multicolumn{5}{@{}l}{\emph{GPT-6 Luna (OpenAI)}} \\
+\quad split questions + movement rates, calibrated & 0.432 \ci{0.405}{0.462} & 0.685 & 1.959 & 54\% \\
+\quad plain description, calibrated & 0.373 \ci{0.346}{0.400} & 0.626 & 2.141 & 54\% \\
+\midrule
+\model{LastSeen} & 0.420 \ci{0.388}{0.455} & 0.586 & 7.150 & 100\% \\
 \model{Prior} & 0.233 & 0.466 & 2.589 & 19\% \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\Cref{tab:jev} shows the results. Given a plain description, the model mostly repeats the last sighting (84\% of its top picks), its accuracy is no better than \model{LastSeen}, and its raw probabilities are over-confident (log-loss 4.07). A two-parameter calibration per horizon group halves that log-loss. Following the vendor's own advice (focused per-enemy questions, facts computed in code, and splitting ``which callout?'' into ``still there?'' and ``if not, where?'') improved its probabilities step by step. Supplying movement rates from the training rounds (of the players last seen in that callout that long ago, the share still there and where the others went) finally broke the anchoring: its last-seen rate fell to 40\%, close to the true 42\%, and its top-3 accuracy rose by 9.8 points (7.8 to 11.6) over the plain variant. Its top-1 accuracy still only ties \model{LastSeen} ($-0.003$; $-0.035$ to $+0.030$), and a 9-parameter formula on the same facts beats it by 4.1 points (1.1 to 6.9). Blending 20\% of Jev into that formula improves log-loss by 0.034 (0.020 to 0.049), so the model extracts something the formula misses, but not much. All experiments together cost about US\$2.60 in API calls.
+\Cref{tab:jev} shows the results. Given a plain description, the model mostly repeats the last sighting (84\% of its top picks), its accuracy is no better than \model{LastSeen}, and its raw probabilities are over-confident (log-loss 4.07). A two-parameter calibration per horizon group halves that log-loss. Following the vendor's own advice (focused per-enemy questions, facts computed in code, and splitting ``which callout?'' into ``still there?'' and ``if not, where?'') improved its probabilities step by step. Supplying movement rates from the training rounds (of the players last seen in that callout that long ago, the share still there and where the others went) finally broke the anchoring: its last-seen rate fell to 40\%, close to the true 42\%, and its top-3 accuracy rose by 7.8 points (5.9 to 9.6) over the plain variant. Its top-1 accuracy still only ties \model{LastSeen} ($-0.003$; $-0.035$ to $+0.030$), and a 9-parameter formula on the same facts beats it by 4.1 points (1.1 to 6.9). Blending 20\% of Jev into that formula improves log-loss by 0.034 (0.020 to 0.049), so the model extracts something the formula misses, but not much. All experiments together cost about US\$2.60 in API calls.
+
+\paragraph{A reasoning model on the same questions.} Is the shortfall specific to Jev? We asked OpenAI's GPT-6 Luna (\texttt{gpt-6-luna}; \citealp{openai2026luna}) exactly the same requests. It is the cheapest model of that family, and so Jev's rival on price. The protocol was written before any answer was collected (\texttt{docs/frontier\_protocol.md}). The questions were shown with TypeSafe's own definitions of its question types, and the model gave a probability for every option through a strict JSON schema, at OpenAI's default reasoning setting and without tools. Its calibration and blend weight were fitted on the same validation moments. With Jev's best questions the two are level. Luna's top-1 accuracy is 1.6 points higher ($-0.4$ to $+3.5$) and Jev's top-3 is 2.3 points higher (0.7 to 3.9). Their log-losses differ by 0.015 ($-0.039$ to $+0.070$). From the plain description, Jev's first guess is better by 3.4 points (1.2 to 5.7), because Luna leaves the last-seen callout too early. In the 5\,s after a sighting, Luna names the right callout 62\% of the time, against 68\% for Jev and 75\% for \model{LastSeen}. The formula beats Luna too, by 2.5 points (0.4 to 4.4) and 0.14 nats. Before correction, Luna's stated probabilities are far better calibrated than Jev's: raw log-loss 2.22 against 4.07 on the plain description. But its answers cost five to eight times as much (US\$6.20 for all 9{,}943 requests) and take a median of 6.5 to 8.5\,s, against 0.16\,s for Jev.
 
 % ================================================================
 \section{Discussion}
@@ -668,7 +677,7 @@ Jev, plain description, raw & 0.406 & 0.605 & 4.066 & 84\% \\
 
 \paragraph{When a real signal adds nothing.} The weapon result is a reminder that a variable can be correlated with the outcome and still add no information beyond what the model already conditions on. Here, position and economy largely determine which weapon a player carries and how they play. Man-advantage matching failed for a different reason: every extra matching variable divides the pool of similar recorded trajectories, and with a few dozen training maps (35 FACEIT maps when this was tested) the pool runs dry, the familiar curse of dimensionality \citep{bellman1961adaptive}.
 
-\paragraph{Structure versus generality.} The general-purpose model anchored on the most salient cue, the last sighting, until it was handed movement statistics that the structured model learns directly. Even then, a nine-parameter formula on the same facts did better. With a few dozen matches of training data, building the structure of the problem into the model (motion, sight lines, Bayes' rule) is far more data-efficient than asking a general model to infer it.
+\paragraph{Structure versus generality.} The general-purpose model anchored on the most salient cue, the last sighting, until it was handed movement statistics that the structured model learns directly. Even then, a nine-parameter formula on the same facts did better. A reasoning model from another vendor, asked the same questions, did no better than Jev. With a few dozen matches of training data, building the structure of the problem into the model (motion, sight lines, Bayes' rule) is far more data-efficient than asking a general model to infer it.
 
 % ================================================================
 \section{Limitations and Ethical Considerations}
@@ -811,7 +820,7 @@ python -m cspredict.evaluate --train-sources hltv xego --sources hltv --split te
 python paper/make_figures.py                     # figures and the paired comparisons
 \end{verbatim}
 }
-The training-data comparison (\cref{tab:sources}) and the FACEIT results repeat the build, calibrate and evaluate steps with \texttt{--sources hltv} or \texttt{--sources xego}; the Jev benchmark is \texttt{python -m cspredict.jev\_lab} (see \texttt{docs/jev.md}). Model names in the code map to the paper as follows: \texttt{ens} is \model{Ens}, \texttt{ens\_nofire} is \model{Ens$_0$}, \texttt{pf} and \texttt{hmm} are \model{PF} and \model{HMM}, \texttt{diffuse}, \texttt{last\_seen}, \texttt{prior} and \texttt{prior\_neg} are the baselines, and the suffix \texttt{\_noneg} removes negative information.
+The training-data comparison (\cref{tab:sources}) and the FACEIT results repeat the build, calibrate and evaluate steps with \texttt{--sources hltv} or \texttt{--sources xego}; the Jev and GPT-6 Luna benchmarks are \texttt{cspredict.jev\_lab} and \texttt{cspredict.frontier\_bench} (see \texttt{docs/jev.md}). Model names in the code map to the paper as follows: \texttt{ens} is \model{Ens}, \texttt{ens\_nofire} is \model{Ens$_0$}, \texttt{pf} and \texttt{hmm} are \model{PF} and \model{HMM}, \texttt{diffuse}, \texttt{last\_seen}, \texttt{prior} and \texttt{prior\_neg} are the baselines, and the suffix \texttt{\_noneg} removes negative information.
 
 The comparison with the true economy class in \cref{sec:problem} uses \texttt{ens\_truebuy} and \texttt{ens\_truebuy\_seed1} on validation, which take the class from the recorded equipment values, and on test the calibrated model of earlier versions (git commit \texttt{66a5aeb}).
 
