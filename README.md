@@ -2,7 +2,7 @@
 
 **Probability maps of where the enemies you can't see are, for Counter-Strike 2 demo review.**
 Trained on pro and top-level FACEIT matches on Mirage. It uses only what one team knew during the
-round, and its percentages are honest: when it says 60–70%, the enemy is there 67% of the time.
+round, and its percentages are honest: when it says 60–70%, the enemy is there 66% of the time.
 
 ![A held-out pro round, seen from the CT side](docs/review_example.gif)
 
@@ -18,6 +18,7 @@ enemy is now. It is built only from what that team knew:
 - radar sightings, and where teammates stood and looked: a teammate who sees nobody is evidence too
 - smokes, flashes and burning molotovs
 - the kill feed and the bomb
+- the round history and the guns it has seen, to judge what the enemies could afford
 - how whole teams tend to be spread out, learned from recorded rounds
 
 `review` renders any round as an animation or contact sheet. `evaluate` scores the maps against where
@@ -29,13 +30,13 @@ On 16 held-out pro maps (102,486 moments where an enemy seen earlier in the roun
 
 | | Right callout (of 23) | Right one in the top 3 | Log-loss (lower is better) |
 |---|---|---|---|
-| **cspredict** | **48.1%** | **72.7%** | **1.67** |
+| **cspredict** | **48.2%** | **72.9%** | **1.66** |
 | "They're where I last saw them" | 42.2% | 58.4% | 7.20 |
 | "Where that side usually is at this point" | 21.3% | 45.1% | 2.61 |
 
 - In 1v1 clutches it names the right callout 60% of the time; "last seen" manages 43%.
 - Its percentages mean what they say. When it says 20–30%, the enemy is there 24% of the time; at
-  60–70%, 67%; at 90%+, 97%.
+  60–70%, 66%; at 90%+, 97%.
 - Log-loss is the average surprise at the truth, −ln(probability given to where the enemy really
   was). It rewards honest uncertainty; a uniform guess over the 23 callouts scores 3.14.
 
@@ -44,20 +45,20 @@ The full tables, with 95% uncertainty ranges and every ablation, are in [docs/re
 ## What I found
 
 - **Learned movement and silence matter most.** Replaying real recorded trajectories from similar
-  situations beats a random walk by a wide margin (callout log-loss 1.88 vs 3.02). Treating "a
-  teammate is looking there and sees nobody" as evidence adds 1.5 to 2.1 points of accuracy to each
+  situations beats a random walk by a wide margin (callout log-loss 1.87 vs 3.02). Treating "a
+  teammate is looking there and sees nobody" as evidence adds 1.5 to 2.5 points of accuracy to each
   motion model.
 - **Honest percentages need to know the time.** Right after a sighting the raw model is too unsure;
   20 s later it is too sure. One correction per horizon fixed both (calibration error 0.0040 →
-  0.0012). A single global correction could not.
+  0.0010). A single global correction could not.
 - **Teams move together, but that only helps once someone has been seen.** Correcting each enemy's
-  map with recorded whole-team formations names the right callout for not-yet-seen enemies 1.6
+  map with recorded whole-team formations names the right callout for not-yet-seen enemies 1.7
   points more often. Before first contact the same correction hurts, so it waits.
 - **Some intuitive features don't pay.** AWPers do move less after being seen (median 190 vs 300
   units in 5 s), but matching on the weapon in hand never beat run-to-run noise. Molotovs help only
   while they burn. Both are measured, reported and left switchable.
 - **More data beats purer data.** Pooling 35 FACEIT matches with the 47 pro maps beats the pro maps
-  alone (top-1 +1.1 points).
+  alone (top-1 +1.2 points).
 - **A general-purpose AI can be coached, up to a point.** Given the same information, TypeSafe's Jev
   mostly repeats the last sighting. Facts computed in code plus movement rates from the training
   rounds lifted its top-3 from 61% to 70%, but its first guess stayed at "last seen" level, and a

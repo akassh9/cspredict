@@ -61,7 +61,7 @@
 \maketitle
 
 \begin{abstract}
-\noindent In tactical shooters such as \emph{Counter-Strike~2} (CS2), most of a round is played against opponents who cannot be seen. We study the problem of estimating, at every moment of a recorded match, a probability distribution over the location of each opponent who has dropped off a team's radar, using only information that team possessed at the time. We present \cs, a factored Bayes filter over a navigation grid learned from player positions (1{,}999 cells grouped into the map's 23 named callouts). Its components are learned from 82 recorded matches on the map \emph{de\_mirage}: a logistic spotting model, fitted on about 27 million observer--enemy pairs, that turns ``a teammate looked here and saw nobody'' into evidence; a particle filter whose particles replay recorded trajectories from similar situations, blended with a grid Markov model and a population prior; learned molotov-avoidance profiles; a coordination correction based on about 134{,}000 recorded snapshots of whole teams; and a post-hoc calibration that depends on how long ago the opponent was last seen. On 16 held-out professional matches (102{,}486 evaluation moments), \cs{} names the correct callout 48.1\% of the time (72.7\% within its top three), against 42.2\% for the common ``they are where I last saw them'' heuristic and 21.3\% for a time-conditioned population prior. Its callout log-loss is 1.665~nats, against 7.196 and 2.607, and its stated probabilities are well calibrated (expected calibration error 0.0012). Ablations attribute most of the gain to replayed trajectories and to negative information, while several intuitive features, such as the weapon an opponent was last seen holding, give no measurable improvement.
+\noindent In tactical shooters such as \emph{Counter-Strike~2} (CS2), most of a round is played against opponents who cannot be seen. We study the problem of estimating, at every moment of a recorded match, a probability distribution over the location of each opponent who has dropped off a team's radar, using only information that team possessed at the time. We present \cs, a factored Bayes filter over a navigation grid learned from player positions (1{,}999 cells grouped into the map's 23 named callouts). Its components are learned from 82 recorded matches on the map \emph{de\_mirage}: a logistic spotting model, fitted on about 27 million observer--enemy pairs, that turns ``a teammate looked here and saw nobody'' into evidence; a particle filter whose particles replay recorded trajectories from similar situations, blended with a grid Markov model and a population prior; learned molotov-avoidance profiles; a coordination correction based on about 134{,}000 recorded snapshots of whole teams; and a post-hoc calibration that depends on how long ago the opponent was last seen. On 16 held-out professional matches (102{,}486 evaluation moments), \cs{} names the correct callout 48.2\% of the time (72.9\% within its top three), against 42.2\% for the common ``they are where I last saw them'' heuristic and 21.3\% for a time-conditioned population prior. Its callout log-loss is 1.663~nats, against 7.196 and 2.607, and its stated probabilities are well calibrated (expected calibration error 0.0010). Ablations attribute most of the gain to replayed trajectories and to negative information, while several intuitive features, such as the weapon an opponent was last seen holding, give no measurable improvement.
 
 \medskip
 \noindent\textbf{Keywords:} Bayesian filtering, particle filters, partial observability, negative information, calibration, proper scoring rules, esports analytics.
@@ -95,7 +95,7 @@ Our system, \cs, addresses these points with a factored Bayes filter: one belief
 
 \paragraph{Contributions.}
 \begin{itemize}
-  \item A formulation of opponent tracking from team-level information in CS2, with an information state restricted to what the team could know (up to one approximation, the opponents' economy class, which an estimate from public information can replace at no measurable cost), and an evaluation protocol based on proper scoring rules, round-level bootstrap intervals and paired comparisons (\cref{sec:problem,sec:setup}).
+  \item A formulation of opponent tracking from team-level information in CS2, with an information state restricted to what the team could know, and an evaluation protocol based on proper scoring rules, round-level bootstrap intervals and paired comparisons (\cref{sec:problem,sec:setup}).
   \item A complete filter learned from demo files alone. It needs no map geometry and combines a logistic spotting model for negative information with a trajectory-library particle filter conditioned on the time since the last sighting (\cref{sec:method}).
   \item A coordination correction that sums over every pairing between tracked opponents and recorded team snapshots, and a calibration that depends on the forecast horizon. We show why the former must wait for first contact and why the latter must depend on the horizon (\cref{sec:team,sec:calibration,sec:discussion}).
   \item An empirical study on 16 held-out professional matches, with ablations of every component, features that did \emph{not} help, and a comparison with a general-purpose model queried through text descriptions (\cref{sec:results}).
@@ -173,8 +173,8 @@ A scoring rule is \emph{proper} if a forecaster minimizes its expected score by 
   \item the position, yaw and pitch of every friendly player, and whether they are alive or blinded by a flashbang;
   \item for every enemy, whether it is on the radar and, if so, its cell $y^e_t \in \mathcal{V}$ (otherwise $y^e_t = \varnothing$) and the weapon in its hands;
   \item active smokes and burning molotovs or incendiaries;
-  \item the kill feed (who killed whom, whether through a wall or smoke) and where friendly victims died;
-  \item which enemies are alive (the scoreboard), the enemy team's economy class at the start of the round (see the assumptions below), the round clock, and the bomb phase $\phi_t \in \{0, 1, 2\}$ (not planted, planted on A, planted on B).
+  \item the kill feed (who killed whom and with which weapon, whether through a wall or smoke) and where friendly victims died;
+  \item which enemies are alive and which rounds each team has won (the scoreboard), the round clock, and the bomb phase $\phi_t \in \{0, 1, 2\}$ (not planted, planted on A, planted on B).
 \end{itemize}
 The demo file also records every enemy's true position $x^e_t$. These positions are withheld from the model and used only for scoring.
 
@@ -184,7 +184,7 @@ The demo file also records every enemy's true position $x^e_t$. These positions 
 \end{equation}
 the cell belief and the implied \emph{callout belief}. We denote by $\tau^e_t$ the seconds since enemy $e$ was last on the radar ($\tau = \infty$ if never this round). Our evaluation targets the mid- and late-round case, meaning moments when an enemy is off the radar \emph{but was seen earlier in the round}. Before first contact the best available answer is essentially ``where that side usually goes,'' which a population prior already provides; those moments are reported separately.
 
-\paragraph{Assumptions.} We assume, as the game's interface makes largely true, that the team can tell which enemy it is seeing on the radar, and that burning molotovs are known to both teams: the thrower saw where it landed, and the flames are visible and audible. One input of the model evaluated in this paper is only approximately part of the team's information: the opponents' economy class (eco, force buy or full buy) is computed from their actual equipment values when freeze time ends. A real team cannot see those values, but it can infer the class from public information, and doing so changes nothing measurable. An estimate from the round history and the guns the team has seen, on the radar or in the kill feed (\cref{sec:infostate}), names the right class for 77\% of validation rounds when freeze time ends, and at 92\% of the validation moments we evaluate, by when guns have been seen. Using it instead of the true class changes callout log-loss by $-0.001$ ($-0.008$ to $+0.007$) on validation, averaged over two random seeds of the particle filter, and by $-0.002$ ($-0.008$ to $+0.004$) on test with the calibration refitted; top-1 accuracy changes by $+0.000$ ($-0.002$ to $+0.002$) and $+0.001$ ($-0.001$ to $+0.004$). Rerunning the particle filter with another random seed moves both metrics as much. The released code uses the estimate; the numbers reported in this paper use the true class. We do not use sound (footsteps, gunfire), by design; \cref{sec:limitations} discusses this choice.
+\paragraph{Assumptions.} We assume, as the game's interface makes largely true, that the team can tell which enemy it is seeing on the radar, and that burning molotovs are known to both teams: the thrower saw where it landed, and the flames are visible and audible. The opponents' economy class (eco, force buy or full buy) shapes how they play, but their money and equipment values are hidden. The model therefore estimates the class from the round history and the guns the team has seen, on the radar or in the kill feed (\cref{sec:infostate}). The estimate names the right class for 77\% of validation rounds when freeze time ends, and at 92\% of the validation moments we evaluate, by when guns have been seen. Earlier versions of the model took the class from the actual equipment values. Doing so instead changes callout log-loss by $+0.001$ ($-0.007$ to $+0.008$) on validation, averaged over two random seeds of the particle filter, and by $+0.002$ ($-0.004$ to $+0.008$) on test; top-1 accuracy changes by $0.000$ ($-0.002$ to $+0.002$) and $-0.001$ ($-0.004$ to $+0.001$). Rerunning the particle filter with another random seed moves both metrics as much. We do not use sound (footsteps, gunfire), by design; \cref{sec:limitations} discusses this choice.
 
 % ================================================================
 \section{Data}
@@ -221,7 +221,7 @@ Evaluation moments & 63{,}906 (validation), 102{,}486 (test) & 48{,}876 (test) \
 \section{Method}
 \label{sec:method}
 
-\Cref{fig:pipeline} gives an overview. Offline, we fit a navigation grid, a spotting model, two motion models, molotov profiles and a library of team snapshots on the training maps, and a calibration map on the validation maps. Online, the filter reconstructs what the team knew and runs a predict--update step for every hidden enemy every 0.25\,s, followed by output-only corrections. \Cref{alg:step} summarizes one step, and \cref{app:hyper} lists every constant.
+\Cref{fig:pipeline} gives an overview. Offline, we fit a navigation grid, a spotting model, two motion models, molotov profiles, a library of team snapshots and an economy estimate on the training maps, and a calibration map on the validation maps. Online, the filter reconstructs what the team knew and runs a predict--update step for every hidden enemy every 0.25\,s, followed by output-only corrections. \Cref{alg:step} summarizes one step, and \cref{app:hyper} lists every constant.
 
 \begin{figure}[t]
 \centering
@@ -260,7 +260,7 @@ Evaluation moments & 63{,}906 (validation), 102{,}486 (test) & 48{,}876 (test) \
 
 \subsection{Reconstructing the information state}
 \label{sec:infostate}
-An enemy is \emph{on the radar} during a step if its spotted flag is set at either of the step's two 8\,Hz samples, and its sighting cell is the most recent one. A friendly player can spot only while alive and not blinded; a flash counts as blinding when it lasts more than 0.3\,s, from the flash until its duration expires. Smokes block sight from 1.0\,s after they burst until 1.5\,s before they expire. We measured both offsets from spotting rates through smokes in the training demos, since a smoke needs time to bloom and thins out before it disappears. Molotovs count as burning from 0.5\,s after they burst, when the flames have spread, until they burn out. A kill by an enemy is attached to the first step at or after it, together with the victim's position and whether it went through a wall or a smoke. The enemy team's economy is summarized by its mean equipment value when freeze time ends: an \emph{eco} below 1{,}500, a \emph{force buy} up to 3{,}800, and a \emph{full buy} above that. A team cannot see its opponents' equipment, so the released code estimates the class from public information instead (\cref{sec:problem}). The prior is how often each class was bought in the training rounds in the same economic situation, smoothed with 3 rounds at the overall frequencies. The situations are the pistol round, overtime, round~2 by the pistol-round result, round~3 after a loss in round~2 (again by the pistol-round result), any other round after a win, and any other round after a loss by its loss-bonus count (one up per round lost in the half, one down per round won, at most 4). Each enemy seen so far multiplies the prior by the probability, under each class, of the dearest gun that enemy has shown on the radar or in the kill feed (pistol, SMG, rifle or sniper), raised to the power 0.7 because teammates buy together. Recorded rounds keep their true class, and the economy factors of the matching kernels below ($0.7$ per class of difference) are then averaged over the estimated distribution of the opponents' class.
+An enemy is \emph{on the radar} during a step if its spotted flag is set at either of the step's two 8\,Hz samples, and its sighting cell is the most recent one. A friendly player can spot only while alive and not blinded; a flash counts as blinding when it lasts more than 0.3\,s, from the flash until its duration expires. Smokes block sight from 1.0\,s after they burst until 1.5\,s before they expire. We measured both offsets from spotting rates through smokes in the training demos, since a smoke needs time to bloom and thins out before it disappears. Molotovs count as burning from 0.5\,s after they burst, when the flames have spread, until they burn out. A kill by an enemy is attached to the first step at or after it, together with the victim's position and whether it went through a wall or a smoke. A team's economy is summarized by its mean equipment value when freeze time ends: an \emph{eco} below 1{,}500, a \emph{force buy} up to 3{,}800, and a \emph{full buy} above that. Recorded rounds carry this class, but the friendly team cannot see its opponents' equipment, so for the round being tracked the class is estimated from public information (\cref{sec:problem}). The prior is how often each class was bought in the training rounds in the same economic situation, smoothed with 3 rounds at the overall frequencies. The situations are the pistol round, overtime, round~2 by the pistol-round result, round~3 after a loss in round~2 (again by the pistol-round result), any other round after a win, and any other round after a loss by its loss-bonus count (one up per round lost in the half, one down per round won, at most 4). Each enemy seen so far multiplies the prior by the probability, under each class, of the dearest gun that enemy has shown on the radar or in the kill feed (pistol, SMG, rifle or sniper), raised to the power 0.7 because teammates buy together. The economy factors of the matching kernels below ($0.7$ per class of difference) are averaged over this estimated distribution of the opponents' class.
 
 \subsection{A navigation grid learned from player positions}
 \label{sec:grid}
@@ -374,7 +374,7 @@ Finally, the callout probabilities are passed through a monotone map fitted on t
   \tilde q(k) = \frac{\sigma\big(a_g \logit q(k) + b_g\big)}{\sum_{k'} \sigma\big(a_g \logit q(k') + b_g\big)},
   \label{eq:calib}
 \end{equation}
-where $\sigma$ is the logistic function. This is Platt scaling \citep{platt2000probabilities} applied to every callout and renormalized. It is increasing in $q$, so it never changes which callout ranks first, only how confident the model is. For small $q$, $\sigma(a \logit q + b) \approx e^{b} q^{a}$, so $a_g$ acts as an inverse temperature: $a > 1$ sharpens the distribution and $a < 1$ softens it. Each cell keeps its share of its callout, $b(i) \leftarrow b(i)\, \tilde q(c(i))/q(c(i))$. Enemies not yet seen this round are left unchanged. The map family and the grouping were chosen by 4-fold cross-validation over whole validation rounds (\cref{sec:res-calibration}). The fitted parameters are $(a_g, b_g) = (1.57, 1.59)$ for 0--5\,s, $(1.04, 0.50)$ for 5--20\,s and $(0.80, -0.10)$ beyond 20\,s: the raw filter is too unsure right after a sighting and too sure long after it.
+where $\sigma$ is the logistic function. This is Platt scaling \citep{platt2000probabilities} applied to every callout and renormalized. It is increasing in $q$, so it never changes which callout ranks first, only how confident the model is. For small $q$, $\sigma(a \logit q + b) \approx e^{b} q^{a}$, so $a_g$ acts as an inverse temperature: $a > 1$ sharpens the distribution and $a < 1$ softens it. Each cell keeps its share of its callout, $b(i) \leftarrow b(i)\, \tilde q(c(i))/q(c(i))$. Enemies not yet seen this round are left unchanged. The map family and the grouping were chosen by 4-fold cross-validation over whole validation rounds (\cref{sec:res-calibration}). The fitted parameters are $(a_g, b_g) = (1.58, 1.61)$ for 0--5\,s, $(1.03, 0.46)$ for 5--20\,s and $(0.80, -0.04)$ beyond 20\,s: the raw filter is too unsure right after a sighting and too sure long after it.
 
 \begin{algorithm}[t]
 \caption{One step of the ensemble filter for a hidden enemy $e$. Lines 12--14 reshape only the reported belief.}
@@ -437,9 +437,9 @@ Two readings of log-loss help build intuition. First, $e^{\LL}$ is the number of
 \toprule
 Model & Callout top-1 & Callout top-3 & Callout log-loss & Cell log-loss \\
 \midrule
-\model{Ens} (full model) & \textbf{0.481} \ci{0.456}{0.508} & \textbf{0.727} \ci{0.701}{0.752} & \textbf{1.665} \ci{1.581}{1.747} & \textbf{5.822} \ci{5.685}{5.951} \\
-\model{Ens$_0$} (before enhancements) & 0.479 \ci{0.454}{0.505} & 0.726 \ci{0.701}{0.751} & 1.689 \ci{1.600}{1.777} & 5.849 \ci{5.706}{5.982} \\
-\model{PF} (trajectory particles) & 0.472 \ci{0.447}{0.497} & 0.718 \ci{0.694}{0.742} & 1.875 \ci{1.745}{2.016} & 6.917 \ci{6.631}{7.200} \\
+\model{Ens} (full model) & \textbf{0.482} \ci{0.457}{0.508} & 0.729 \ci{0.704}{0.754} & \textbf{1.663} \ci{1.580}{1.745} & \textbf{5.827} \ci{5.692}{5.952} \\
+\model{Ens$_0$} (before enhancements) & 0.480 \ci{0.455}{0.506} & \textbf{0.730} \ci{0.705}{0.754} & 1.687 \ci{1.599}{1.774} & 5.854 \ci{5.711}{5.984} \\
+\model{PF} (trajectory particles) & 0.475 \ci{0.451}{0.500} & 0.724 \ci{0.699}{0.748} & 1.867 \ci{1.741}{2.001} & 6.928 \ci{6.656}{7.203} \\
 \model{HMM} (grid Markov chain) & 0.466 \ci{0.438}{0.495} & 0.704 \ci{0.674}{0.736} & 2.591 \ci{2.347}{2.838} & 7.060 \ci{6.753}{7.370} \\
 \model{Diffuse} (random walk) & 0.444 \ci{0.417}{0.471} & 0.689 \ci{0.660}{0.720} & 3.023 \ci{2.743}{3.312} & 7.850 \ci{7.513}{8.191} \\
 \model{LastSeen} & 0.422 \ci{0.394}{0.452} & 0.584 \ci{0.555}{0.613} & 7.196 \ci{6.834}{7.529} & 16.671 \ci{16.599}{16.738} \\
@@ -450,7 +450,7 @@ Uniform & -- & -- & 3.135 & 7.600 \\
 \end{tabular}
 \end{table}
 
-\Cref{tab:main} gives the headline comparison. The full model is the best in every metric. Against the last-seen heuristic, it names the right callout 6.0 points more often (paired 95\% interval 4.0 to 7.9) and has the right callout in its top three 14.2 points more often (12.0 to 16.4). Against the population prior the gains are 26.8 and 27.5 points. Its callout log-loss of 1.665 corresponds to a perplexity of $e^{1.665} \approx 5.3$ callouts, against 13.6 for the prior and 23 for a uniform guess. In the betting reading, a bankroll wagered according to \model{Ens} against a bookmaker pricing with \model{Prior} grows by a factor of $e^{0.94} \approx 2.6$ per bet on average (in the geometric sense). \model{LastSeen} has respectable accuracy but a catastrophic log-loss: it puts all its probability on one callout and is wrong 58\% of the time, so a Kelly bettor using it goes broke. Adding negative information and the kill feed to the prior changes almost nothing (\model{Prior+Neg} vs.\ \model{Prior}), because the prior does not know where the enemy was last seen.
+\Cref{tab:main} gives the headline comparison. The full model is the best in every metric except top-3, where \model{Ens$_0$} is 0.1 points ahead, well within noise. Against the last-seen heuristic, it names the right callout 6.1 points more often (paired 95\% interval 4.1 to 8.0) and has the right callout in its top three 14.5 points more often (12.3 to 16.7). Against the population prior the gains are 26.9 and 27.8 points. Its callout log-loss of 1.663 corresponds to a perplexity of $e^{1.663} \approx 5.3$ callouts, against 13.6 for the prior and 23 for a uniform guess. In the betting reading, a bankroll wagered according to \model{Ens} against a bookmaker pricing with \model{Prior} grows by a factor of $e^{0.94} \approx 2.6$ per bet on average (in the geometric sense). \model{LastSeen} has respectable accuracy but a catastrophic log-loss: it puts all its probability on one callout and is wrong 58\% of the time, so a Kelly bettor using it goes broke. Adding negative information and the kill feed to the prior changes almost nothing (\model{Prior+Neg} vs.\ \model{Prior}), because the prior does not know where the enemy was last seen.
 
 \begin{table}[t]
 \centering
@@ -463,23 +463,23 @@ Comparison & $\Delta$ callout top-1 & $\Delta$ callout log-loss & $\Delta$ cell 
 \midrule
 \multicolumn{4}{@{}l}{\emph{Learned motion}} \\
 \quad \model{HMM} vs.\ \model{Diffuse} & $+0.022$ \pd{+0.005}{+0.040} & $-0.432$ \pd{-0.558}{-0.308} & $-0.791$ \pd{-0.958}{-0.630} \\
-\quad \model{PF} vs.\ \model{Diffuse} & $+0.027$ \pd{+0.009}{+0.045} & $-1.148$ \pd{-1.367}{-0.941} & $-0.933$ \pd{-1.161}{-0.707} \\
-\quad \model{PF} vs.\ \model{HMM} & $+0.005$ \pd{-0.012}{+0.022} & $-0.716$ \pd{-0.893}{-0.549} & $-0.143$ \pd{-0.327}{+0.050} \\
+\quad \model{PF} vs.\ \model{Diffuse} & $+0.031$ \pd{+0.012}{+0.048} & $-1.156$ \pd{-1.375}{-0.943} & $-0.923$ \pd{-1.161}{-0.678} \\
+\quad \model{PF} vs.\ \model{HMM} & $+0.008$ \pd{-0.009}{+0.025} & $-0.724$ \pd{-0.901}{-0.559} & $-0.132$ \pd{-0.339}{+0.074} \\
 \multicolumn{4}{@{}l}{\emph{Negative information}} \\
-\quad \model{PF} vs.\ \model{PF}$-$neg & $+0.021$ \pd{+0.007}{+0.036} & $-0.044$ \pd{-0.080}{-0.007} & $-0.094$ \pd{-0.186}{-0.016} \\
+\quad \model{PF} vs.\ \model{PF}$-$neg & $+0.025$ \pd{+0.010}{+0.040} & $-0.042$ \pd{-0.080}{-0.005} & $-0.103$ \pd{-0.194}{-0.017} \\
 \quad \model{HMM} vs.\ \model{HMM}$-$neg & $+0.015$ \pd{+0.006}{+0.024} & $-0.191$ \pd{-0.261}{-0.129} & $-0.245$ \pd{-0.317}{-0.179} \\
 \multicolumn{4}{@{}l}{\emph{Ensemble and evidence}} \\
-\quad \model{Ens$_0$} vs.\ \model{PF} (the mixture) & $+0.007$ \pd{+0.002}{+0.013} & $-0.186$ \pd{-0.261}{-0.127} & $-1.068$ \pd{-1.238}{-0.913} \\
-\quad \model{Ens} vs.\ no kill feed & $+0.001$ \pd{-0.002}{+0.004} & $-0.006$ \pd{-0.011}{-0.002} & $-0.006$ \pd{-0.018}{+0.007} \\
+\quad \model{Ens$_0$} vs.\ \model{PF} (the mixture) & $+0.005$ \pd{-0.001}{+0.010} & $-0.180$ \pd{-0.251}{-0.124} & $-1.074$ \pd{-1.242}{-0.917} \\
+\quad \model{Ens} vs.\ no kill feed & $+0.003$ \pd{-0.000}{+0.006} & $-0.010$ \pd{-0.015}{-0.004} & $-0.007$ \pd{-0.020}{+0.004} \\
 \multicolumn{4}{@{}l}{\emph{Monte Carlo noise}} \\
-\quad \model{Ens$_0$} vs.\ another seed & $+0.000$ \pd{-0.002}{+0.003} & $-0.002$ \pd{-0.010}{+0.007} & $-0.001$ \pd{-0.020}{+0.019} \\
+\quad \model{Ens$_0$} vs.\ another seed & $+0.000$ \pd{-0.004}{+0.004} & $+0.004$ \pd{-0.003}{+0.012} & $+0.009$ \pd{-0.008}{+0.027} \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 \subsection{What matters}
 \label{sec:ablation}
-\Cref{tab:ablation} isolates the components. \emph{Learned motion} is the largest single ingredient. Replaying recorded trajectories instead of a random walk cuts the callout log-loss by 1.15 nats, and it beats the learned grid chain by 0.72 nats while matching its accuracy. The chain's probabilities are badly spread: it often ranks the right callout first, but it assigns too little probability to where fast-moving players actually go. \emph{Negative information} improves every motion model, adding 2.1 points of accuracy to the particles and 1.5 to the grid chain. The \emph{mixture} of particles with the grid chain and the prior adds another 0.7 points and removes 0.19 nats of log-loss, and more than a nat of cell log-loss, by insuring against routes no particle took. The kill feed gives a small but reliable log-loss gain; it matters because 48\% of killers are not on the radar at the moment of the kill. The seed comparison bounds Monte Carlo noise at about $\pm 0.003$ in accuracy and $\pm 0.01$ in callout log-loss on this test set. Validation ablations, not repeated on test, showed that conditioning the motion on the time since the last sighting was the largest single fix, roughly halving the cases where the true position received almost no probability, and that knowing the correct bombsite after the plant also helps.
+\Cref{tab:ablation} isolates the components. \emph{Learned motion} is the largest single ingredient. Replaying recorded trajectories instead of a random walk cuts the callout log-loss by 1.16 nats, and it beats the learned grid chain by 0.72 nats while matching its accuracy. The chain's probabilities are badly spread: it often ranks the right callout first, but it assigns too little probability to where fast-moving players actually go. \emph{Negative information} improves every motion model, adding 2.5 points of accuracy to the particles and 1.5 to the grid chain. The \emph{mixture} of particles with the grid chain and the prior removes 0.18 nats of log-loss, and more than a nat of cell log-loss, by insuring against routes no particle took; its accuracy gain of 0.5 points is within noise. The kill feed gives a small but reliable log-loss gain; it matters because 48\% of killers are not on the radar at the moment of the kill. The seed comparison bounds Monte Carlo noise at about $\pm 0.004$ in accuracy and $\pm 0.01$ in callout log-loss on this test set. Validation ablations, not repeated on test, showed that conditioning the motion on the time since the last sighting was the largest single fix, roughly halving the cases where the true position received almost no probability, and that knowing the correct bombsite after the plant also helps.
 
 \subsection{Accuracy as the trail goes cold}
 \label{sec:horizon}
@@ -491,11 +491,11 @@ Comparison & $\Delta$ callout top-1 & $\Delta$ callout log-loss & $\Delta$ cell 
   \label{fig:horizon}
 \end{figure}
 
-\Cref{fig:horizon} breaks the results down by the time since the last sighting (full table in \cref{app:tables}). In the first two seconds most enemies have not left their callout, so \model{Ens} and \model{LastSeen} are nearly tied in accuracy (88.9\% vs.\ 88.0\%), but the model's log-loss is six times lower (0.31 vs.\ 1.82) because it hedges the remaining cases. The gap then widens: 42.4\% against 37.2\% at 10--20\,s, and 25.2\% against 14.5\% after 40\,s. By 20--40\,s, \model{LastSeen} is barely better than the population prior (23.0\% vs.\ 20.3\%), and after 40\,s it is worse (14.5\% vs.\ 21.1\%), while the model stays above both. Its log-loss rises smoothly towards the prior's as the information ages, never exceeding it. This is the behaviour one wants from a forecaster that knows what it does not know.
+\Cref{fig:horizon} breaks the results down by the time since the last sighting (full table in \cref{app:tables}). In the first two seconds most enemies have not left their callout, so \model{Ens} and \model{LastSeen} are nearly tied in accuracy (88.8\% vs.\ 88.0\%), but the model's log-loss is six times lower (0.31 vs.\ 1.82) because it hedges the remaining cases. The gap then widens: 42.5\% against 37.2\% at 10--20\,s, and 25.4\% against 14.5\% after 40\,s. By 20--40\,s, \model{LastSeen} is barely better than the population prior (23.0\% vs.\ 20.3\%), and after 40\,s it is worse (14.5\% vs.\ 21.1\%), while the model stays above both. Its log-loss rises smoothly towards the prior's as the information ages, never exceeding it. This is the behaviour one wants from a forecaster that knows what it does not know.
 
 \subsection{Clutch situations}
 \label{sec:clutch}
-Rounds often end with one player left against several (a ``clutch''), and these are the moments where a coach most wants to know what the lone player could have inferred. \Cref{tab:clutch} shows callout accuracy from the lone player's side. The model's lead over \model{LastSeen} is largest in the 1-versus-1 (59.7\% vs.\ 42.5\%), where a single opponent's movement dominates. Each slice contains only 40 to 98 rounds, so differences of a point or two between \model{Ens} and \model{Ens$_0$} are within noise. Against four or five opponents, the full model's log-loss is clearly better than \model{Ens$_0$}'s ($-0.041$ and $-0.038$ nats).
+Rounds often end with one player left against several (a ``clutch''), and these are the moments where a coach most wants to know what the lone player could have inferred. \Cref{tab:clutch} shows callout accuracy from the lone player's side. The model's lead over \model{LastSeen} is largest in the 1-versus-1 (59.9\% vs.\ 42.5\%), where a single opponent's movement dominates. Each slice contains only 40 to 98 rounds, so differences of a point or two between \model{Ens} and \model{Ens$_0$} are within noise. Against four or five opponents, the full model's log-loss is clearly better than \model{Ens$_0$}'s ($-0.040$ and $-0.036$ nats).
 
 \begin{table}[t]
 \centering
@@ -507,12 +507,12 @@ Rounds often end with one player left against several (a ``clutch''), and these 
  & 1v1 & 1v2 & 1v3 & 1v4 & 1v5 \\
 \midrule
 Samples & 2{,}001 & 4{,}292 & 5{,}963 & 8{,}701 & 3{,}179 \\
-\model{Ens} & \textbf{0.597} & 0.509 & 0.476 & \textbf{0.400} & \textbf{0.411} \\
-\model{Ens$_0$} & 0.592 & \textbf{0.515} & \textbf{0.485} & 0.387 & 0.408 \\
+\model{Ens} & \textbf{0.599} & 0.514 & 0.483 & \textbf{0.390} & \textbf{0.412} \\
+\model{Ens$_0$} & 0.596 & \textbf{0.521} & \textbf{0.493} & 0.378 & 0.407 \\
 \model{LastSeen} & 0.425 & 0.421 & 0.376 & 0.343 & 0.394 \\
 \model{Prior+Neg} & 0.361 & 0.349 & 0.304 & 0.157 & 0.131 \\
 \midrule
-\model{Ens} callout log-loss & 1.324 & 1.632 & 1.608 & 2.027 & 1.836 \\
+\model{Ens} callout log-loss & 1.326 & 1.634 & 1.599 & 2.025 & 1.835 \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -529,15 +529,15 @@ Samples & 2{,}001 & 4{,}292 & 5{,}963 & 8{,}701 & 3{,}179 \\
 \toprule
 Map family & One map for all moments & By horizon \\
 \midrule
-None & 1.6873 & -- \\
-Power (temperature scaling), 1 parameter & 1.6856 & 1.6669 \\
-Platt (logit-affine), 2 parameters & 1.6845 & \textbf{1.6651} \\
-Piecewise linear in $\log q$, 4 parameters & 1.6821 & 1.6673 \\
+None & 1.6890 & -- \\
+Power (temperature scaling), 1 parameter & 1.6871 & 1.6680 \\
+Platt (logit-affine), 2 parameters & 1.6859 & \textbf{1.6660} \\
+Piecewise linear in $\log q$, 4 parameters & 1.6824 & 1.6681 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\Cref{tab:calib-cv} shows how the calibration map was chosen. A single map for all moments barely helps (at best $-0.005$ nats), because the raw model errs in opposite directions at different horizons. Fitting separate maps by the time since the last sighting gains about four times as much ($-0.020$ to $-0.022$, depending on the family). \Cref{fig:calibration} shows why on the test set. Within 5\,s of a sighting the raw ensemble is \emph{under}-confident (above the diagonal), because its 10\% population-prior component caps how sure it can be. Across all horizons, its most confident bin claimed 92\% on average and was right 98.5\% of the time. After 20\,s it is \emph{over}-confident: stated probabilities averaging 44\% and 54\% came true only 36\% and 47\% of the time. On the test set the calibrated model's calibration error falls from 0.0040 to 0.0012 overall, and in every horizon group (\cref{fig:calibration}). \Cref{tab:reliability} lists the overall reliability. Calibration left top-1 accuracy unchanged by construction and improved the callout log-loss by 0.021 nats (paired interval 0.010 to 0.032).
+\Cref{tab:calib-cv} shows how the calibration map was chosen. A single map for all moments barely helps (at best $-0.007$ nats), because the raw model errs in opposite directions at different horizons. Fitting separate maps by the time since the last sighting gains about three times as much ($-0.021$ to $-0.023$, depending on the family). \Cref{fig:calibration} shows why on the test set. Within 5\,s of a sighting the raw ensemble is \emph{under}-confident (above the diagonal), because its 10\% population-prior component caps how sure it can be. Across all horizons, its most confident bin claimed 92\% on average and was right 98.5\% of the time. After 20\,s it is \emph{over}-confident: stated probabilities averaging 44\% and 54\% came true only 37\% and 47\% of the time. On the test set the calibrated model's calibration error falls from 0.0040 to 0.0010 overall, and in every horizon group (\cref{fig:calibration}). \Cref{tab:reliability} lists the overall reliability. Calibration left top-1 accuracy unchanged by construction and improved the callout log-loss by 0.020 nats (paired interval 0.010 to 0.031).
 
 \begin{figure}[t]
   \centering
@@ -556,15 +556,15 @@ Piecewise linear in $\log q$, 4 parameters & 1.6821 & 1.6673 \\
 \toprule
 Stated & 20--30\% & 30--40\% & 40--50\% & 50--60\% & 60--70\% & 70--80\% & 80--90\% & 90\%+ \\
 \midrule
-Before calibration & 21.2\% & 32.0\% & 40.4\% & 50.0\% & 62.3\% & 74.6\% & 89.0\% & 98.5\% \\
-After calibration & 24.0\% & 33.4\% & 43.6\% & 52.9\% & 67.0\% & 75.2\% & 85.2\% & 97.0\% \\
+Before calibration & 20.7\% & 32.4\% & 40.8\% & 50.2\% & 62.3\% & 74.5\% & 89.0\% & 98.5\% \\
+After calibration & 24.0\% & 33.7\% & 43.8\% & 53.3\% & 66.4\% & 74.8\% & 85.7\% & 97.0\% \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 \subsection{The four enhancements}
 \label{sec:enhancements}
-The ensemble \model{Ens$_0$} was extended in four steps, each tested on validation first. \Cref{tab:enhance} reports each step's paired effect on test relative to the step before, together with the subset of moments where the step is designed to act. Overall, \model{Ens} improves on \model{Ens$_0$} by 0.024 nats of callout log-loss (0.012 to 0.036) and 0.027 of cell log-loss (0.015 to 0.040); its top-1 gain of $+0.002$ ($-0.001$ to $+0.005$) is within noise. Most of the gain is concentrated where each step should act: molotovs help while a fire burns (19\% of samples), and the team correction helps enemies nobody has seen yet once one of their teammates has been. In the betting reading, 0.024 nats is a bankroll growing by about 2.4\% per bet against the earlier model.
+The ensemble \model{Ens$_0$} was extended in four steps, each tested on validation first. \Cref{tab:enhance} reports each step's paired effect on test relative to the step before, together with the subset of moments where the step is designed to act. Overall, \model{Ens} improves on \model{Ens$_0$} by 0.024 nats of callout log-loss (0.012 to 0.036) and 0.027 of cell log-loss (0.015 to 0.040); its top-1 gain of $+0.002$ ($-0.001$ to $+0.006$) is within noise. Most of the gain is concentrated where each step should act: molotovs help while a fire burns (19\% of samples), and the team correction helps enemies nobody has seen yet once one of their teammates has been. In the betting reading, 0.024 nats is a bankroll growing by about 2.4\% per bet against the earlier model.
 
 \begin{table}[t]
 \centering
@@ -576,23 +576,23 @@ The ensemble \model{Ens$_0$} was extended in four steps, each tested on validati
 \toprule
 Step & $\Delta$ top-1 & $\Delta$ callout LL & $\Delta$ cell LL & Where it shows \\
 \midrule
-Weapon at last sighting (tested, left off) & $-0.001$ \pd{-0.005}{+0.003} & $-0.006$ \pd{-0.014}{+0.002} & $-0.012$ \pd{-0.029}{+0.007} & Nowhere beyond Monte Carlo noise \\[2pt]
-Molotovs & $+0.001$ \pd{-0.000}{+0.002} & $-0.001$ \pd{-0.002}{+0.000} & $-0.004$ \pd{-0.007}{-0.002} & While a fire burns: top-1 $+0.004$ \pd{-0.000}{+0.009}, cell LL $-0.017$ \pd{-0.027}{-0.006} \\[2pt]
-Team coordination & $+0.001$ \pd{-0.002}{+0.005} & $-0.002$ \pd{-0.007}{+0.003} & $-0.002$ \pd{-0.007}{+0.003} & Never-seen enemies after first contact: top-1 $+0.016$ \pd{+0.011}{+0.022}, LL $-0.031$ \pd{-0.040}{-0.022}; count error $-0.021$ \pd{-0.034}{-0.007} \\[2pt]
-Calibration & 0 (by design) & $-0.021$ \pd{-0.032}{-0.010} & $-0.021$ \pd{-0.032}{-0.010} & Reliability (\cref{fig:calibration}) \\
+Weapon at last sighting (tested, left off) & $-0.002$ \pd{-0.006}{+0.000} & $-0.002$ \pd{-0.010}{+0.005} & $-0.014$ \pd{-0.032}{+0.003} & Nowhere beyond Monte Carlo noise \\[2pt]
+Molotovs & $+0.001$ \pd{-0.000}{+0.002} & $-0.001$ \pd{-0.002}{+0.000} & $-0.004$ \pd{-0.007}{-0.002} & While a fire burns: top-1 $+0.005$ \pd{+0.001}{+0.010}, cell LL $-0.017$ \pd{-0.026}{-0.006} \\[2pt]
+Team coordination & $+0.002$ \pd{-0.001}{+0.005} & $-0.003$ \pd{-0.008}{+0.003} & $-0.003$ \pd{-0.008}{+0.003} & Never-seen enemies after first contact: top-1 $+0.017$ \pd{+0.011}{+0.022}, LL $-0.031$ \pd{-0.040}{-0.022}; count error $-0.020$ \pd{-0.033}{-0.007} \\[2pt]
+Calibration & 0 (by design) & $-0.020$ \pd{-0.031}{-0.010} & $-0.020$ \pd{-0.031}{-0.010} & Reliability (\cref{fig:calibration}) \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 \subsection{Coordination and the team as a whole}
 \label{sec:res-team}
-The test set contains 246{,}193 samples of enemies who have not been seen yet in the round while at least one of their teammates has. For these, the team correction raises top-1 accuracy from 0.175 to 0.191 and lowers callout log-loss from 2.607 to 2.576. That brings the model level with \model{Prior+Neg} (0.191, 2.600) on enemies it has no direct evidence about, which the independent filters could not reach. At the team level, the expected number of hidden enemies per callout misses the actual count by a squared error of 2.908 per moment after first contact (2.787 to 3.036), against 2.931 for the independent filters and 3.264 for the prior. The model still underestimates stacks: where it expects 1.5--2 enemies in one callout there are 1.95 on average, and where it expects 2--3 (mean 2.26) there are 2.48.
+The test set contains 246{,}193 samples of enemies who have not been seen yet in the round while at least one of their teammates has. For these, the team correction raises top-1 accuracy from 0.176 to 0.193 and lowers callout log-loss from 2.609 to 2.578. That brings the model level with \model{Prior+Neg} (0.191, 2.600) on enemies it has no direct evidence about, which the independent filters could not reach. At the team level, the expected number of hidden enemies per callout misses the actual count by a squared error of 2.908 per moment after first contact (2.787 to 3.035), against 2.931 for the independent filters and 3.264 for the prior. The model still underestimates stacks: where it expects 1.5--2 enemies in one callout there are 1.96 on average, and where it expects 2--3 (mean 2.26) there are 2.49.
 
 Two design details mattered on validation. Summing over all pairings (\cref{eq:team}) beat keeping each snapshot's single best pairing by a wide margin. And applying the correction before first contact \emph{hurt}. With no sightings, every enemy's belief is the same, so the product in \cref{eq:team} multiplies five copies of one likelihood ratio and counts the shared negative evidence five times.
 
 \subsection{Training data: more versus purer}
 \label{sec:res-data}
-\Cref{tab:sources} compares models trained on the FACEIT matches, the professional matches, or both, all scored on the professional test set before calibration so that they are compared alike. Pooling the 35 FACEIT matches with the 47 professional ones beats the professional matches alone by 1.1 points of accuracy (0.1 to 2.1) and 0.037 nats of log-loss (0.018 to 0.057). For this model, more data beats purer data.
+\Cref{tab:sources} compares models trained on the FACEIT matches, the professional matches, or both, all scored on the professional test set before calibration so that they are compared alike. Pooling the 35 FACEIT matches with the 47 professional ones beats the professional matches alone by 1.2 points of accuracy (0.2 to 2.1) and 0.043 nats of log-loss (0.023 to 0.063). For this model, more data beats purer data.
 
 \begin{table}[t]
 \centering
@@ -603,16 +603,16 @@ Two design details mattered on validation. Summing over all pairings (\cref{eq:t
 \toprule
 Trained on & Callout top-1 & Callout log-loss & Cell log-loss \\
 \midrule
-FACEIT only (35 maps) & 0.463 & 1.767 & 6.163 \\
-HLTV only (47 maps) & 0.470 & 1.723 & 5.939 \\
-Both (82 maps) & \textbf{0.481} & \textbf{1.686} & \textbf{5.843} \\
+FACEIT only (35 maps) & 0.463 & 1.761 & 6.162 \\
+HLTV only (47 maps) & 0.470 & 1.726 & 5.944 \\
+Both (82 maps) & \textbf{0.482} & \textbf{1.684} & \textbf{5.847} \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 \subsection{The FACEIT development set}
 \label{sec:res-faceit}
-On the 6 FACEIT test matches (48{,}876 samples), with models trained and calibrated on FACEIT data only, \model{Ens} reaches 0.463 top-1 \ci{0.429}{0.498} and 1.724 callout log-loss \ci{1.606}{1.841}, against 0.378 and 7.834 for \model{LastSeen} and 0.219 and 2.603 for \model{Prior}. The four enhancements improve log-loss by 0.062 nats (0.042 to 0.082), more than on professional matches. Professional play is more predictable. \model{LastSeen} alone is right 42\% of the time on professional matches but only 38\% on FACEIT, because professionals hold positions more, and in 1-versus-1 clutches \model{Ens} names the right callout 60\% of the time on professional matches but only 25\% on FACEIT.
+On the 6 FACEIT test matches (48{,}876 samples), with models trained and calibrated on FACEIT data only, \model{Ens} reaches 0.463 top-1 \ci{0.430}{0.499} and 1.731 callout log-loss \ci{1.611}{1.849}, against 0.378 and 7.834 for \model{LastSeen} and 0.219 and 2.603 for \model{Prior}. The four enhancements improve log-loss by 0.063 nats (0.043 to 0.082), more than on professional matches. Professional play is more predictable. \model{LastSeen} alone is right 42\% of the time on professional matches but only 38\% on FACEIT, because professionals hold positions more, and in 1-versus-1 clutches \model{Ens} names the right callout 60\% of the time on professional matches but only 24\% on FACEIT.
 
 \subsection{Features that did not help}
 \label{sec:negative}
@@ -638,7 +638,7 @@ Can a general-purpose model do the same job given the same information? We queri
 \toprule
 Model & Callout top-1 & Top-3 & Log-loss & Picks last-seen callout \\
 \midrule
-\cs{} (\model{Ens}) & \textbf{0.488} \ci{0.457}{0.520} & \textbf{0.737} & \textbf{1.648} & 59\% \\
+\cs{} (\model{Ens}) & \textbf{0.489} \ci{0.459}{0.522} & \textbf{0.739} & \textbf{1.648} & 59\% \\
 Formula: 9 weights on the same facts, no Jev & 0.457 \ci{0.425}{0.490} & 0.710 & 1.819 & 75\% \\
 Jev, split questions + movement rates, calibrated & 0.416 \ci{0.387}{0.449} & 0.703 & 1.944 & 40\% \\
 Jev, split questions, calibrated & 0.416 & 0.683 & 2.023 & 75\% \\
@@ -713,7 +713,7 @@ Sampling & 64-tick demos stored at 8\,Hz; filter step 0.25\,s (16 ticks) \\
 Grid & 64-unit columns; floors split at a 110-unit height gap; a floor needs 8 samples (1\,s); step edges up to 48 units; 16-unit raster for ray casting \\
 Spotting model & 8 distance bins; 36 horizontal and 10 vertical 5$^\circ$ bins; 3 sight-line classes; $L_2$ penalty $0.005\|w\|^2$; rays sampled every 8 units up to 4{,}500; eye height 64, chest 48; smoke radius 130; pair correction with 3 pseudo-counts, clipped to $[0.02, 50]$; $\pi_o \le 0.9$ \\
 Information state & smoke blocks from $+1.0$\,s after burst to $-1.5$\,s before expiry; molotov burns from $+0.5$\,s; blind if flash $> 0.3$\,s; economy edges 1{,}500 and 3{,}800 \\
-Economy estimate & released code only (\cref{sec:problem}); 11 situations with 3 pseudo-rounds at the overall frequencies; gun likelihoods with add-one smoothing, exponent 0.7 (fitted on training rounds) \\
+Economy estimate & 11 situations with 3 pseudo-rounds at the overall frequencies; gun likelihoods with add-one smoothing, exponent 0.7 (fitted on training rounds) \\
 Negative information & $\gamma = 1$ \\
 Kill feed & $K = 0.05 + 0.95\,\tilde\pi/\max\tilde\pi$; wallbang or smoke: 1 within 2{,}000 units, else 0.05 \\
 Grid chain & time-since-seen bins 0--2, 2--5, 5--10, 10--20, 20+\,s and never; smoothing 0.5; shrinkage 4 pseudo-counts \\
@@ -722,7 +722,7 @@ Ensemble & 0.75 particles, 0.15 grid chain, 0.10 prior with negative information
 Prior & 5-s round-time bins by side and bomb phase; 0.01 pseudo-count per cell \\
 Molotovs & 20-unit bins to 280; same floor within 100 units; control window from 1\,s after burnout; step profile bounded to $[0.01, 1]$ \\
 Team correction & snapshots every 2\,s; clock $\sigma = 2$\,s, window $\pm 3$\,s; economy $\times 0.7$ per level; $\times 0.5$ per extra recorded player; $\beta = 1$; probability floor $10^{-3}$; shrinkage $\lambda = 100$; at most 5{,}000 candidates; only after first contact \\
-Calibration & Platt map per horizon group (0--5, 5--20, 20+\,s): $(a, b) = (1.57, 1.59), (1.04, 0.50), (0.80, -0.10)$ \\
+Calibration & Platt map per horizon group (0--5, 5--20, 20+\,s): $(a, b) = (1.58, 1.61), (1.03, 0.46), (0.80, -0.04)$ \\
 \bottomrule
 \end{tabularx}
 \end{table}
@@ -741,13 +741,13 @@ Calibration & Platt map per horizon group (0--5, 5--20, 20+\,s): $(a, b) = (1.57
 \midrule
  & Samples & 11{,}256 & 14{,}004 & 16{,}612 & 21{,}292 & 23{,}229 & 16{,}093 \\
 \midrule
-\multirow{4}{*}{Top-1} & \model{Ens} & \textbf{0.889} & \textbf{0.720} & \textbf{0.550} & 0.424 & \textbf{0.301} & \textbf{0.252} \\
- & \model{Ens$_0$} & \textbf{0.889} & 0.715 & 0.544 & \textbf{0.427} & 0.298 & 0.250 \\
+\multirow{4}{*}{Top-1} & \model{Ens} & 0.888 & \textbf{0.720} & \textbf{0.553} & 0.425 & \textbf{0.302} & \textbf{0.254} \\
+ & \model{Ens$_0$} & \textbf{0.889} & 0.716 & 0.546 & \textbf{0.429} & 0.297 & 0.251 \\
  & \model{LastSeen} & 0.880 & 0.675 & 0.497 & 0.372 & 0.230 & 0.145 \\
  & \model{Prior+Neg} & 0.199 & 0.201 & 0.213 & 0.249 & 0.203 & 0.211 \\
 \midrule
-\multirow{4}{*}{Log-loss} & \model{Ens} & \textbf{0.308} & \textbf{0.812} & \textbf{1.342} & \textbf{1.845} & \textbf{2.310} & \textbf{2.520} \\
- & \model{Ens$_0$} & 0.365 & 0.831 & 1.358 & 1.852 & 2.351 & 2.532 \\
+\multirow{4}{*}{Log-loss} & \model{Ens} & \textbf{0.308} & \textbf{0.812} & \textbf{1.340} & \textbf{1.849} & \textbf{2.305} & \textbf{2.515} \\
+ & \model{Ens$_0$} & 0.365 & 0.830 & 1.355 & 1.857 & 2.345 & 2.526 \\
  & \model{LastSeen} & 1.815 & 4.587 & 6.723 & 7.962 & 9.300 & 9.669 \\
  & \model{Prior+Neg} & 2.565 & 2.576 & 2.548 & 2.525 & 2.661 & 2.765 \\
 \bottomrule
@@ -767,8 +767,8 @@ Calibration & Platt map per horizon group (0--5, 5--20, 20+\,s): $(a, b) = (1.57
 \toprule
 Model & Mass within 300 units & Expected distance (units) & Callout log-loss (proper) \\
 \midrule
-\model{Ens} & 0.274 & 1{,}099 & \textbf{1.665} \\
-\model{PF} & 0.287 & 1{,}022 & 1.875 \\
+\model{Ens} & 0.274 & 1{,}100 & \textbf{1.663} \\
+\model{PF} & 0.287 & 1{,}022 & 1.867 \\
 \model{HMM} & 0.319 & 916 & 2.591 \\
 \model{Diffuse} & 0.300 & 902 & 3.023 \\
 \model{LastSeen} & \textbf{0.339} & \textbf{855} & 7.196 \\
@@ -787,8 +787,8 @@ Model & Mass within 300 units & Expected distance (units) & Callout log-loss (pr
 \toprule
 Model expects & 0--0.1 & 0.1--0.25 & 0.25--0.5 & 0.5--0.75 & 0.75--1 & 1--1.5 & 1.5--2 \\
 \midrule
-Mean expected & 0.029 & 0.161 & 0.347 & 0.613 & 0.857 & 1.173 & 1.691 \\
-Mean actual & 0.030 & 0.159 & 0.338 & 0.585 & 0.849 & 1.313 & 1.952 \\
+Mean expected & 0.029 & 0.161 & 0.347 & 0.613 & 0.858 & 1.174 & 1.688 \\
+Mean actual & 0.031 & 0.158 & 0.340 & 0.588 & 0.843 & 1.313 & 1.957 \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -799,7 +799,7 @@ All results can be regenerated from the demo files with the project's command-li
 {\footnotesize
 \begin{verbatim}
 python -m cspredict.parse                        # demos -> parquet tables
-python -m cspredict.build --sources hltv xego    # grid, spotting, motion, fires, teams
+python -m cspredict.build --sources hltv xego    # grid, spotting, motion, fires, teams, economy
 python -m cspredict.evaluate --train-sources hltv xego --sources hltv \
     --split val --models ens_uncal --out outputs/final/val_pooled_uncal
 python -m cspredict.calibrate --train-sources hltv xego \
@@ -813,6 +813,6 @@ python paper/make_figures.py                     # figures and the paired compar
 }
 The training-data comparison (\cref{tab:sources}) and the FACEIT results repeat the build, calibrate and evaluate steps with \texttt{--sources hltv} or \texttt{--sources xego}; the Jev benchmark is \texttt{python -m cspredict.jev\_lab} (see \texttt{docs/jev.md}). Model names in the code map to the paper as follows: \texttt{ens} is \model{Ens}, \texttt{ens\_nofire} is \model{Ens$_0$}, \texttt{pf} and \texttt{hmm} are \model{PF} and \model{HMM}, \texttt{diffuse}, \texttt{last\_seen}, \texttt{prior} and \texttt{prior\_neg} are the baselines, and the suffix \texttt{\_noneg} removes negative information.
 
-The numbers here come from git commit \texttt{66a5aeb}, which took the opponents' economy class from their true equipment values. Later code estimates it (\cref{sec:problem}); there, \texttt{ens\_truebuy} reproduces the uncalibrated \model{Ens} exactly.
+The comparison with the true economy class in \cref{sec:problem} uses \texttt{ens\_truebuy} and \texttt{ens\_truebuy\_seed1} on validation, which take the class from the recorded equipment values, and on test the calibrated model of earlier versions (git commit \texttt{66a5aeb}).
 
 \end{document}

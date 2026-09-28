@@ -31,7 +31,7 @@ were fitted on validation. The code is `src/cspredict/jev_lab.py`.
 
 | | Callout top-1 | Top 3 | Log-loss (lower is better) | Picks the last-seen callout |
 |---|---|---|---|---|
-| **cspredict** (our model) | **0.488** (0.457–0.520) | **0.737** | **1.648** | 59% |
+| **cspredict** (our model) | **0.489** (0.459–0.522) | **0.739** | **1.648** | 59% |
 | Formula: 9 weights on the facts + movement rates, no Jev | 0.457 (0.425–0.490) | 0.710 | 1.819 | 75% |
 | Jev, split + movement rates, calibrated | 0.416 (0.387–0.449) | 0.703 | 1.944 | 40% |
 | Jev, split, calibrated | 0.416 | 0.683 | 2.023 | 75% |
