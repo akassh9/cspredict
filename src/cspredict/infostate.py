@@ -16,9 +16,14 @@ import polars as pl
 
 from cspredict.config import SAMPLE_EVERY, STEP_TICKS, TICKRATE
 from cspredict.dataset import DemoRef
+from cspredict.fires import active_fires
 from cspredict.grid import NavGrid
 
 BUY_EDGES = (1500.0, 3800.0)  # team mean equipment value when freeze time ends
+# Spotting rates through smokes in the training demos: a smoke blocks sight about a second after
+# it bursts and is see-through again about 1.5 s before its expiry event (it thins out first).
+SMOKE_BLOOM_S = 1.0
+SMOKE_FADE_S = 1.5
 
 # The weapon in an enemy's hands is visible whenever they are seen (and called out: "AWP mid").
 # Shotguns and machine guns are grouped with SMGs: together they are 0.1% of sightings.
@@ -69,6 +74,7 @@ class Episode:
     enemy_node: np.ndarray  # (S, E) true node (scoring only)
     enemy_xyz: np.ndarray  # (S, E, 3) true position (scoring and drawing only)
     smokes: list[np.ndarray]  # per step, (k, 2) centres of active smokes
+    fires: list[np.ndarray]  # per step, (k, 3) centres of burning molotovs / incendiaries (known to both teams)
     kills: list[list[tuple[int, np.ndarray, bool]]]  # per step: (enemy index, victim xyz, through smoke/wall)
 
     @property
@@ -115,6 +121,7 @@ def episodes(grid: NavGrid, ref: DemoRef, friendly: str) -> Iterator[Episode]:
     ticks = ref.table("ticks")
     rounds = ref.table("rounds")
     smokes = ref.table("smokes")
+    infernos = ref.table("infernos")
     blinds = ref.table("blinds")
     kills = ref.table("kills")
 
@@ -161,7 +168,10 @@ def episodes(grid: NavGrid, ref: DemoRef, friendly: str) -> Iterator[Episode]:
         rs = smokes.filter(pl.col("round_num") == r["round_num"])
         sx, sy = rs["X"].to_numpy(), rs["Y"].to_numpy()
         s0, s1 = rs["start_tick"].to_numpy(), rs["end_tick"].to_numpy()
+        s0 = s0 + SMOKE_BLOOM_S * TICKRATE
+        s1 = s1 - SMOKE_FADE_S * TICKRATE
         step_smokes = [np.column_stack([sx, sy])[(s0 <= t) & (t < s1)] for t in step_ticks]
+        step_fires = active_fires(infernos.filter(pl.col("round_num") == r["round_num"]), step_ticks)
 
         # The kill feed names every killer, and where the teammate died is known.
         step_kills: list[list[tuple[int, np.ndarray, bool]]] = [[] for _ in step_ticks]
@@ -204,5 +214,6 @@ def episodes(grid: NavGrid, ref: DemoRef, friendly: str) -> Iterator[Episode]:
             enemy_node=enode[si],
             enemy_xyz=exyz[si],
             smokes=step_smokes,
+            fires=step_fires,
             kills=step_kills,
         )

@@ -10,6 +10,7 @@ data/raw/<source>/ are unpacked first, and only demos recorded on MAP_NAME are p
 Usage:
     python -m cspredict.parse           # parse every new demo under data/raw
     python -m cspredict.parse --force   # re-parse everything
+    python -m cspredict.parse --refresh-grenades   # only recompute smoke/fire end ticks
 """
 
 from __future__ import annotations
@@ -159,28 +160,50 @@ def _fix_bomb_sites(rounds: pl.DataFrame, bomb: pl.DataFrame, ticks: pl.DataFram
     )
 
 
+GRENADES = {"smokes": ("smokegrenade_expired", SMOKE_SECONDS), "infernos": ("inferno_expire", INFERNO_SECONDS)}
+
+
+def _with_end_ticks(table: pl.DataFrame, parser: DemoParser, kind: str) -> pl.DataFrame:
+    """Add each grenade's end tick: the first expiry event of its entity id after it started.
+    Entity ids are reused within a match, so earlier expiries of the same id belong to earlier
+    grenades. Falls back to the usual lifetime when no expiry is found."""
+    expire_event, seconds = GRENADES[kind]
+    expired = _event(parser, expire_event)
+    fallback = pl.col("start_tick") + int(seconds * TICKRATE)
+    if not (len(expired) and "entityid" in expired.columns):
+        return table.with_columns(fallback.alias("end_tick"))
+    ends = (
+        expired.select(pl.col("entityid").cast(table["entity_id"].dtype).alias("entity_id"), pl.col("tick").cast(pl.Int64).alias("end_tick"))
+        .sort("end_tick")
+    )
+    matched = (
+        table.with_row_index("_row")
+        .with_columns(pl.col("start_tick").cast(pl.Int64))
+        .sort("start_tick")
+        .join_asof(ends, left_on="start_tick", right_on="end_tick", by="entity_id", strategy="forward",
+                   allow_exact_matches=False, check_sortedness=False)  # both sides sorted above
+        .sort("_row")
+        .drop("_row")
+    )
+    valid = pl.col("end_tick").is_not_null() & (pl.col("end_tick") - pl.col("start_tick") < 2 * seconds * TICKRATE)
+    return matched.with_columns(pl.when(valid).then(pl.col("end_tick")).otherwise(fallback).alias("end_tick"))
+
+
 def _grenades(dem: Demo, parser: DemoParser, kind: str) -> pl.DataFrame:
     """Smokes or infernos with an end tick taken from the expiry event when available."""
-    table, expire_event, seconds = {
-        "smokes": (dem.smokes, "smokegrenade_expired", SMOKE_SECONDS),
-        "infernos": (dem.infernos, "inferno_expire", INFERNO_SECONDS),
-    }[kind]
+    table = {"smokes": dem.smokes, "infernos": dem.infernos}[kind]
     table = table.select(_existing(table, ["entity_id", "start_tick", "X", "Y", "Z", "round_num", "thrower_side"]))
-    expired = _event(parser, expire_event)
-    if len(expired) and "entityid" in expired.columns:
-        ends = expired.group_by("entityid").agg(pl.col("tick").min().alias("end_tick"))
-        table = table.join(
-            ends.rename({"entityid": "entity_id"}).with_columns(pl.col("entity_id").cast(table["entity_id"].dtype)),
-            on="entity_id",
-            how="left",
-        )
-    else:
-        table = table.with_columns(pl.lit(None, dtype=pl.Int64).alias("end_tick"))
-    # An entity id can be reused later in the match, so only accept expiries after the start.
-    fallback = pl.col("start_tick") + int(seconds * TICKRATE)
-    valid = pl.col("end_tick").is_not_null() & (pl.col("end_tick") > pl.col("start_tick"))
-    valid = valid & (pl.col("end_tick") - pl.col("start_tick") < 2 * seconds * TICKRATE)
-    return table.with_columns(pl.when(valid).then(pl.col("end_tick")).otherwise(fallback).alias("end_tick"))
+    return _with_end_ticks(table, parser, kind)
+
+
+def refresh_grenade_ends(out_dir: Path) -> None:
+    """Recompute the end ticks of a parsed demo's smokes and infernos from its raw demo (only the
+    expiry events are read, so this is much faster than re-parsing)."""
+    parser = DemoParser(json.loads((out_dir / "meta.json").read_text())["file"])
+    for kind in GRENADES:
+        path = out_dir / f"{kind}.parquet"
+        table = pl.read_parquet(path)
+        _with_end_ticks(table.drop("end_tick"), parser, kind).write_parquet(path)
 
 
 def parse_demo(dem_path: Path, out_dir: Path, source: str, demo_id: str) -> dict | None:
@@ -260,7 +283,14 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Parse CS2 demos into parquet tables.")
     ap.add_argument("--raw", type=Path, default=RAW_DIR, help="folder holding <source>/<demos>")
     ap.add_argument("--force", action="store_true", help="re-parse demos that were already parsed")
+    ap.add_argument("--refresh-grenades", action="store_true", help="only recompute smoke and fire end ticks of parsed demos")
     args = ap.parse_args()
+
+    if args.refresh_grenades:
+        for meta in sorted(PARSED_DIR.glob("*/*/meta.json")):
+            refresh_grenade_ends(meta.parent)
+            logger.info(f"Refreshed grenade end ticks of {meta.parent.parent.name}/{meta.parent.name}")
+        return
 
     extract_archives(args.raw)
     for dem_path in sorted(args.raw.rglob("*.dem")):

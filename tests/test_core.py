@@ -50,7 +50,7 @@ def test_beliefs_are_distributions_and_collapse_on_sightings(models):
     if not refs:
         pytest.skip("no parsed test demos")
     ep = next(episodes(models.grid, refs[0], "ct"))
-    ev = gather_evidence(ep, models.grid, models.spot)
+    ev = gather_evidence(ep, models.grid, models.spot, models.fires)
     for cfg in DEFAULT_CONFIGS:
         for s, b in run_filter(ep, models.grid, models.motion, cfg, ev, models.library):
             assert b.shape == (len(ep.enemy_ids), models.grid.n)

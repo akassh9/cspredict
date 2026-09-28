@@ -18,6 +18,7 @@ from loguru import logger
 
 from cspredict.config import MAP_NAME, MAPS_DIR
 from cspredict.dataset import list_demos, load_ticks
+from cspredict.fires import FireModel, fit_fire_model
 from cspredict.grid import NavGrid, build_grid
 from cspredict.motion import MotionModel, fit_motion_model
 from cspredict.particles import TrajectoryLibrary, build_library
@@ -30,9 +31,10 @@ class Models:
     spot: SpotModel
     motion: MotionModel
     library: TrajectoryLibrary
+    fires: FireModel | None = None
 
 
-PARTS = ("grid", "spot", "motion", "library")
+PARTS = ("grid", "spot", "motion", "library", "fires")
 
 
 def model_dir(sources: list[str]) -> Path:
@@ -45,6 +47,7 @@ def load_models(path: Path) -> Models:
         spot=SpotModel.load(path / "spot.npz"),
         motion=MotionModel.load(path / "motion.npz"),
         library=TrajectoryLibrary.load(path / "library.npz"),
+        fires=FireModel.load(path / "fires.npz") if (path / "fires.npz").exists() else None,
     )
 
 
@@ -74,6 +77,8 @@ def main() -> None:
         fit_motion_model(grid, train).save(out / "motion.npz")
     if "library" in args.only:
         build_library(grid, train).save(out / "library.npz")
+    if "fires" in args.only:
+        fit_fire_model(grid, MotionModel.load(out / "motion.npz"), train).save(out / "fires.npz")
     (out / "train_demos.json").write_text(json.dumps([r.demo_id for r in train], indent=2))
     logger.info(f"Models written to {out} in {time.perf_counter() - start:.0f} s")
 

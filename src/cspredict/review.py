@@ -25,7 +25,7 @@ from PIL import Image  # noqa: E402
 from cspredict.build import Models, load_models, model_dir  # noqa: E402
 from cspredict.config import CELL, FINE_CELL, OUTPUT_DIR  # noqa: E402
 from cspredict.dataset import list_demos  # noqa: E402
-from cspredict.filters import DEFAULT_CONFIGS, gather_evidence, run_filter  # noqa: E402
+from cspredict.filters import ALL_CONFIGS, gather_evidence, run_filter  # noqa: E402
 from cspredict.infostate import Episode, episodes  # noqa: E402
 
 BG = "#15171c"
@@ -37,8 +37,8 @@ HDR_MASS = 0.8  # heat shows the smallest set of cells holding this share of hid
 
 def round_beliefs(ep: Episode, models: Models, model: str) -> np.ndarray:
     """(S, E, N) beliefs for one filter configuration."""
-    cfg = next(c for c in DEFAULT_CONFIGS if c.name == model)
-    ev = gather_evidence(ep, models.grid, models.spot)
+    cfg = next(c for c in ALL_CONFIGS if c.name == model)
+    ev = gather_evidence(ep, models.grid, models.spot, models.fires)
     beliefs = run_filter(ep, models.grid, models.motion, cfg, ev, models.library)
     return np.stack([b.astype(np.float32) for _, b in beliefs])
 
@@ -207,7 +207,7 @@ def main() -> None:
     ap.add_argument("round", nargs="?", type=int)
     ap.add_argument("--list", metavar="DEMO_ID", help="list rounds of a demo and exit")
     ap.add_argument("--side", default="ct", choices=["ct", "t"], help="whose information to use")
-    ap.add_argument("--model", default="ens", choices=[c.name for c in DEFAULT_CONFIGS])
+    ap.add_argument("--model", default="ens", choices=[c.name for c in ALL_CONFIGS])
     ap.add_argument("--truth", action="store_true", help="also mark where enemies really were")
     ap.add_argument("--train-sources", nargs="+", default=["xego"])
     ap.add_argument("--panels", type=int, default=6)

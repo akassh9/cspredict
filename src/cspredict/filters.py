@@ -6,6 +6,9 @@ filter step (0.25 s) from what the friendly team knows.
     update:   on the radar  -> b = delta(node where seen)
               off the radar -> b <- b * L^gamma   L = P(not spotted | enemy in node), from visibility.py
               got a kill    -> b <- b * K         K = P(could hit the victim | killer in node)
+    fires:    moves into burning cells are downweighted (the blocked probability stays with the other
+              moves from the same cell), and the output belief is weighted by how rarely players
+              stand that close to a burning fire (fires.py)
 
 Configurations cover the learned filters and the baselines they are compared against:
 
@@ -18,8 +21,13 @@ Configurations cover the learned filters and the baselines they are compared aga
     pf_noneg    trajectory-library particles + kills, no negative information (ablation)
     pf          trajectory-library particles + negative information + kills (see particles.py)
     ens         75% pf + 15% hmm + 10% prior_neg: particles give sharp routes, the other two
-                keep some mass on every plausible spot so an unexpected route is never ruled out
+                keep some mass on every plausible spot so an unexpected route is never ruled out.
+                The grid motion avoids burning fires and the output is weighted by the fire
+                occupancy profile (fires.py).
     ens_nokill  ens without the kill-feed evidence (ablation)
+
+Named ablations (ABLATIONS, scored with evaluate --models) keep earlier versions and rejected
+variants runnable, e.g. ens_nofire (ens before fires) and the weapon-matching variants.
 """
 
 from __future__ import annotations
@@ -29,6 +37,7 @@ from dataclasses import dataclass, field, replace
 
 import numpy as np
 
+from cspredict.fires import FireModel
 from cspredict.grid import NavGrid
 from cspredict.infostate import Episode
 from cspredict.motion import N_TIME_BINS, TIME_BIN_S, MotionModel, context_key, since_bin
@@ -50,6 +59,10 @@ class FilterConfig:
     weapon: float = 1.0  # particles: weight for recorded states with another last-seen weapon class (1 = off)
     weapon_mode: str = "all"  # which weapon classes to compare: "all", "guns" or "awp" (see particles.py)
     hmm_weapon: bool = False  # grid motion also conditioned on the weapon class when last seen
+    fire_mask: bool = False  # grid motion: moves into burning cells are downweighted (fires.step)
+    fire_wait: bool = False  # particles whose recording walks into fire wait at the edge (ablation)
+    fire_weight: bool = False  # particles re-weighted every step by fires.occupancy (ablation)
+    fire_occ: bool = False  # output belief weighted by the occupancy profile around burning fires
     seed: int = 0  # particle random seed (a second seed measures Monte Carlo noise)
 
 
@@ -62,19 +75,24 @@ DEFAULT_CONFIGS = (
     FilterConfig("hmm", "learned", negative=True),
     FilterConfig("pf_noneg", "particles", negative=False),
     FilterConfig("pf", "particles", negative=True),
-    FilterConfig("ens", "particles", negative=True, mix_hmm=0.15, mix_prior=0.10),
-    FilterConfig("ens_nokill", "particles", negative=True, kills=False, mix_hmm=0.15, mix_prior=0.10),
+    FilterConfig("ens", "particles", negative=True, mix_hmm=0.15, mix_prior=0.10, fire_mask=True, fire_occ=True),
+    FilterConfig("ens_nokill", "particles", negative=True, kills=False, mix_hmm=0.15, mix_prior=0.10, fire_mask=True, fire_occ=True),
 )
-_ENS = FilterConfig("ens", "particles", negative=True, mix_hmm=0.15, mix_prior=0.10)
+_ENS = FilterConfig("ens_nofire", "particles", negative=True, mix_hmm=0.15, mix_prior=0.10)  # ens before fires
 # Variants scored only when named (evaluate --models), for validation ablations.
 ABLATIONS: tuple[FilterConfig, ...] = (
     *(replace(_ENS, name=f"ens_w{w}", weapon=w) for w in (0.7, 0.5, 0.3)),
     FilterConfig("hmm_weapon", "learned", negative=True, hmm_weapon=True),
     replace(_ENS, name="ens_hmmw", hmm_weapon=True),
     replace(_ENS, name="ens_w0.5_hmmw", weapon=0.5, hmm_weapon=True),
+    _ENS,
     replace(_ENS, name="ens_seed1", seed=1),
     *(replace(_ENS, name=f"ens_awp{w}", weapon=w, weapon_mode="awp") for w in (0.5, 0.3)),
     replace(_ENS, name="ens_guns0.5", weapon=0.5, weapon_mode="guns"),
+    replace(_ENS, name="ens_fire_occ", fire_occ=True),
+    replace(_ENS, name="ens_fire_wait", fire_mask=True, fire_wait=True, fire_occ=True),
+    replace(_ENS, name="ens_fire_weight", fire_mask=True, fire_weight=True, fire_occ=True),
+    FilterConfig("hmm_fire", "learned", negative=True, fire_mask=True, fire_occ=True),
 )
 ALL_CONFIGS = DEFAULT_CONFIGS + ABLATIONS
 
@@ -85,9 +103,11 @@ class Evidence:
 
     unseen: np.ndarray  # (S, N) likelihood of staying off the radar
     kills: dict[int, list[tuple[int, np.ndarray]]] = field(default_factory=dict)  # step -> [(enemy, K)]
+    fire_step: dict[int, np.ndarray] = field(default_factory=dict)  # step -> (N,) move multiplier near fires
+    fire_occ: dict[int, np.ndarray] = field(default_factory=dict)  # step -> (N,) occupancy likelihood near fires
 
 
-def gather_evidence(ep: Episode, grid: NavGrid, spot: SpotModel) -> Evidence:
+def gather_evidence(ep: Episode, grid: NavGrid, spot: SpotModel, fires: FireModel | None = None) -> Evidence:
     unseen = np.empty((ep.n_steps, grid.n))
     for s in range(ep.n_steps):
         xyz, yaw, pitch = ep.observers(s)
@@ -97,7 +117,33 @@ def gather_evidence(ep: Episode, grid: NavGrid, spot: SpotModel) -> Evidence:
         for s, step_kills in enumerate(ep.kills)
         if step_kills
     }
-    return Evidence(unseen=unseen, kills=kills)
+    ev = Evidence(unseen=unseen, kills=kills)
+    if fires is not None:
+        for s, burning in enumerate(ep.fires):
+            if len(burning):
+                ev.fire_step[s] = fires.node_factors(grid, burning, "step")
+                ev.fire_occ[s] = fires.node_factors(grid, burning, "occupancy")
+    return ev
+
+
+def predict(b: np.ndarray, t, mask: np.ndarray | None = None) -> np.ndarray:
+    """One motion step b @ T. With a per-node mask m (fires) the transitions become
+    T_ij m_j / sum_k T_ik m_k: a blocked move's probability goes to the other moves from the same
+    cell (wait at the edge, go around) instead of vanishing."""
+    if mask is None:
+        return np.asarray(b @ t)
+    reach = np.asarray(t @ mask).ravel()
+    return np.asarray((b / np.maximum(reach, 1e-300)) @ t) * mask
+
+
+def _fire_output(b: np.ndarray, cfg: FilterConfig, ev: Evidence, s: int) -> np.ndarray:
+    """The yielded belief weighted by the fire occupancy profile. Only the output is weighted: the
+    fire is one standing condition, not a fresh observation every step."""
+    occ = ev.fire_occ.get(s) if cfg.fire_occ else None
+    if occ is None:
+        return b
+    post = b * occ
+    return post / post.sum(axis=1, keepdims=True)
 
 
 def _apply_kills(b: np.ndarray, cfg: FilterConfig, ev: Evidence, s: int) -> np.ndarray:
@@ -106,6 +152,33 @@ def _apply_kills(b: np.ndarray, cfg: FilterConfig, ev: Evidence, s: int) -> np.n
             post = b[e] * like
             b[e] = post / max(post.sum(), 1e-300)
     return b
+
+
+OUTPUT_OPTIONS = ("fire_occ",)  # options that only reweight the output belief, not the filter's state
+
+
+def _core(cfg: FilterConfig) -> FilterConfig:
+    """The config with its output-only options reset: configs sharing a core share one filter run."""
+    return replace(cfg, name="", **{k: FilterConfig.__dataclass_fields__[k].default for k in OUTPUT_OPTIONS})
+
+
+def run_filters(
+    ep: Episode,
+    grid: NavGrid,
+    motion: MotionModel,
+    cfgs: tuple[FilterConfig, ...],
+    ev: Evidence,
+    library: TrajectoryLibrary | None = None,
+) -> Iterator[tuple[int, dict[str, np.ndarray]]]:
+    """Yield (step, {config name: beliefs (E, N)}) for several configs at once. Configs that differ
+    only in output options (OUTPUT_OPTIONS) share one run of the filter."""
+    groups: dict[FilterConfig, list[FilterConfig]] = {}
+    for cfg in cfgs:
+        groups.setdefault(_core(cfg), []).append(cfg)
+    runs = [(_run_core(ep, grid, motion, core, ev, library), members) for core, members in groups.items()]
+    for steps in zip(*(run for run, _ in runs)):
+        s = steps[0][0]
+        yield s, {cfg.name: _output(b, cfg, ev, s) for (_, b), (_, members) in zip(steps, runs) for cfg in members}
 
 
 def run_filter(
@@ -117,6 +190,23 @@ def run_filter(
     library: TrajectoryLibrary | None = None,
 ) -> Iterator[tuple[int, np.ndarray]]:
     """Yield (step, beliefs) with beliefs of shape (E, N) after each step's update."""
+    for s, beliefs in run_filters(ep, grid, motion, (cfg,), ev, library):
+        yield s, beliefs[cfg.name]
+
+
+def _output(b: np.ndarray, cfg: FilterConfig, ev: Evidence, s: int) -> np.ndarray:
+    """Output-only processing of a step's beliefs."""
+    return _fire_output(b, cfg, ev, s)
+
+
+def _run_core(
+    ep: Episode,
+    grid: NavGrid,
+    motion: MotionModel,
+    cfg: FilterConfig,
+    ev: Evidence,
+    library: TrajectoryLibrary | None = None,
+) -> Iterator[tuple[int, np.ndarray]]:
     if cfg.motion == "particles":
         yield from _run_particle_filter(ep, grid, motion, cfg, ev, library)
         return
@@ -143,9 +233,10 @@ def run_filter(
                 motion.key(ep.enemy, phase, since_bin(v), int(w) if cfg.hmm_weapon else -1)
                 for v, w in zip(since, last_weapon)
             ]
+            mask = ev.fire_step.get(s) if cfg.fire_mask else None
             for key in set(keys):
                 rows = [e for e, k in enumerate(keys) if k == key]
-                b[rows] = np.asarray(b[rows] @ motion.trans[key])
+                b[rows] = predict(b[rows], motion.trans[key], mask)
         if cfg.negative:
             post = b * ev.unseen[s] ** cfg.gamma
             mass = post.sum(axis=1, keepdims=True)
@@ -168,14 +259,15 @@ def _run_particle_filter(ep, grid, motion, cfg, ev, library) -> Iterator[tuple[i
     particles = run_particles(
         ep, grid, library, ev.unseen if cfg.negative else None, cfg.gamma,
         kills=ev.kills if cfg.kills else None, weapon_mismatch=cfg.weapon, weapon_mode=cfg.weapon_mode, seed=cfg.seed,
+        fire_step=ev.fire_step if cfg.fire_wait else None, fire_weight=ev.fire_occ if cfg.fire_weight else None,
     )  # fmt: skip
     if cfg.mix_hmm <= 0 and cfg.mix_prior <= 0:
         for s, b in particles:
             yield s, (1 - FLOOR) * b + FLOOR / grid.n
         return
     plain = replace(cfg, mix_hmm=0.0, mix_prior=0.0)
-    hmm = run_filter(ep, grid, motion, replace(plain, motion="learned"), ev)
-    prior = run_filter(ep, grid, motion, replace(plain, motion="prior"), ev)
+    hmm = _run_core(ep, grid, motion, replace(plain, motion="learned"), ev)
+    prior = _run_core(ep, grid, motion, replace(plain, motion="prior"), ev)
     w_pf = 1.0 - cfg.mix_hmm - cfg.mix_prior
     for (s, b), (_, h), (_, p) in zip(particles, hmm, prior):
         yield s, w_pf * b + cfg.mix_hmm * h + cfg.mix_prior * p

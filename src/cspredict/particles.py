@@ -264,11 +264,18 @@ def run_particles(
     kills: dict[int, list[tuple[int, np.ndarray]]] | None = None,
     weapon_mismatch: float = WEAPON_MISMATCH,
     weapon_mode: str = "all",
+    fire_step: dict[int, np.ndarray] | None = None,
+    fire_weight: dict[int, np.ndarray] | None = None,
 ):
     """Yield (step, beliefs (E, N)) like filters.run_filter. `kills` maps a step to
     (enemy, likelihood over nodes) pairs from the kill feed; `weapon_mismatch` weights recorded
-    states whose last-seen weapon class differs from the enemy's."""
+    states whose last-seen weapon class differs from the enemy's. `fire_step` maps a step to per-node
+    move multipliers near burning fires: a particle whose recorded path steps into fire waits at
+    the edge (it keeps its place in the recording) with probability 1 - m(next) / m(current).
+    `fire_weight` maps a step to per-node occupancy factors near fires that multiply the particle
+    weights like evidence, so particles standing in fire are resampled away."""
     rng = np.random.default_rng(seed)
+    fire_rng = np.random.default_rng(seed + 1)  # separate stream: runs without fires stay identical
     side = SIDE_ID[ep.enemy]
     n_e, m = len(ep.enemy_ids), n_particles or N_PARTICLES  # read at call time so overrides apply
     idx = np.stack([lib.sample_starts(rng, side, m) for _ in range(n_e)])
@@ -296,11 +303,19 @@ def run_particles(
         if s > 0:
             nxt = lib.nxt[idx]
             ended = nxt < 0
+            if fire_step is not None and s in fire_step:
+                mult = fire_step[s]
+                go = mult[lib.node[np.maximum(nxt, 0)]] / mult[lib.node[idx]]
+                nxt = np.where(~ended & (fire_rng.random(idx.shape) >= go), idx, nxt)  # wait outside the fire
             idx = np.where(ended, idx, nxt)
             for e in np.flatnonzero(ended.any(axis=1)):
                 rematch(e, np.flatnonzero(ended[e]), s)
         if unseen is not None:
             w = w * unseen[s][lib.node[idx]] ** gamma
+            tot = w.sum(axis=1, keepdims=True)
+            w = np.where(tot > 1e-300, w / np.maximum(tot, 1e-300), 1.0 / m)
+        if fire_weight is not None and s in fire_weight:
+            w = w * fire_weight[s][lib.node[idx]]
             tot = w.sum(axis=1, keepdims=True)
             w = np.where(tot > 1e-300, w / np.maximum(tot, 1e-300), 1.0 / m)
         for e, like in (kills or {}).get(s, []):

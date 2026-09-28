@@ -37,7 +37,7 @@ from loguru import logger
 from cspredict.build import load_models, model_dir
 from cspredict.config import OUTPUT_DIR
 from cspredict.dataset import DemoRef, list_demos
-from cspredict.filters import ALL_CONFIGS, DEFAULT_CONFIGS, FilterConfig, gather_evidence, run_filter
+from cspredict.filters import ALL_CONFIGS, DEFAULT_CONFIGS, FilterConfig, gather_evidence, run_filters
 from cspredict.infostate import WEAPON_CLASSES, Episode, episodes
 
 NEAR = 300.0
@@ -69,7 +69,7 @@ def _sighting_history(ep: Episode) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
 def score_episode(ep: Episode, models, configs: tuple[FilterConfig, ...]) -> tuple[pl.DataFrame, pl.DataFrame]:
     """Per-sample scores, and the full callout distributions of the mid/late-round samples."""
     grid = models.grid
-    ev = gather_evidence(ep, grid, models.spot)
+    ev = gather_evidence(ep, grid, models.spot, models.fires)
     ever, since, last_weapon = _sighting_history(ep)
     place_onehot = np.zeros((grid.n, len(grid.places)))
     place_onehot[np.arange(grid.n), grid.node_place_idx] = 1.0
@@ -77,24 +77,24 @@ def score_episode(ep: Episode, models, configs: tuple[FilterConfig, ...]) -> tup
     n_enemy = ep.enemy_alive.sum(axis=1)
 
     cols: dict[str, list] = {k: [] for k in (
-        "model", "step", "enemy", "t_rel", "seen_before", "since", "last_weapon", "n_friend", "n_enemy", "planted",
+        "model", "step", "enemy", "t_rel", "seen_before", "since", "last_weapon", "n_friend", "n_enemy", "planted", "fire",
         "p_true", "rank", "mass300", "exp_dist", "p_place", "place_true", "place_rank",
     )}  # fmt: skip
     probs: list[np.ndarray] = []
-    for cfg in configs:
-        for s, b in run_filter(ep, grid, models.motion, cfg, ev, models.library):
-            es = np.flatnonzero(ep.enemy_alive[s] & ~ep.enemy_seen[s] & (ep.enemy_node[s] >= 0))
-            if len(es) == 0:
-                continue
-            true = ep.enemy_node[s, es]
+    for s, beliefs in run_filters(ep, grid, models.motion, configs, ev, models.library):
+        es = np.flatnonzero(ep.enemy_alive[s] & ~ep.enemy_seen[s] & (ep.enemy_node[s] >= 0))
+        if len(es) == 0:
+            continue
+        true = ep.enemy_node[s, es]
+        d = grid.dist[true]
+        place_true = grid.node_place_idx[true]
+        k = len(es)
+        for name, b in beliefs.items():
             be = b[es]
             p_true = be[np.arange(len(es)), true]
-            d = grid.dist[true]
             pp = be @ place_onehot
-            place_true = grid.node_place_idx[true]
             p_place = pp[np.arange(len(es)), place_true]
-            k = len(es)
-            cols["model"] += [cfg.name] * k
+            cols["model"] += [name] * k
             cols["step"].append(np.full(k, s))
             cols["enemy"].append(es)
             cols["t_rel"].append(np.full(k, ep.t_rel[s]))
@@ -104,6 +104,7 @@ def score_episode(ep: Episode, models, configs: tuple[FilterConfig, ...]) -> tup
             cols["n_friend"].append(np.full(k, n_friend[s]))
             cols["n_enemy"].append(np.full(k, n_enemy[s]))
             cols["planted"].append(np.full(k, ep.planted[s]))
+            cols["fire"].append(np.full(k, len(ep.fires[s]) > 0))  # a molotov or incendiary is burning
             cols["p_true"].append(p_true)
             cols["rank"].append((be >= p_true[:, None]).sum(axis=1) - 1)  # ties count against the model
             cols["mass300"].append((be * (d <= NEAR)).sum(axis=1))
