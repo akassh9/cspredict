@@ -149,13 +149,11 @@ class RoundRenderer:
         for spine in ax.spines.values():
             spine.set_visible(False)
 
-    def legend_text(self) -> str:
+    def legend_text(self, lines: int = 1) -> str:
         truth = "   green x = true enemy position" if self.show_truth else ""
-        return (
-            f"{FRIEND_NAME[self.ep.friendly]} = your team + view direction   red dot = enemy on radar   "
-            f"ring = last seen (age){truth}   grey = smoke   orange = molotov   "
-            f"heat = most likely {HDR_MASS:.0%} of hidden-enemy probability"
-        )
+        first = f"{FRIEND_NAME[self.ep.friendly]} = your team + view direction   red dot = enemy on radar   ring = last seen (age)"
+        second = f"grey = smoke   orange = molotov   heat = most likely {HDR_MASS:.0%} of hidden-enemy probability{truth}"
+        return f"{first}\n{second}" if lines == 2 else f"{first}   {second}"
 
 
 FRIEND_NAME = {"ct": "blue", "t": "yellow"}
@@ -171,8 +169,8 @@ def render_gif(r: RoundRenderer, path: Path, every: int = 2, fps: int = 8) -> No
     for s in range(0, r.ep.n_steps, every):
         fig, ax = plt.subplots(figsize=(6.2, 5.8), dpi=100, facecolor=BG)
         r.draw(ax, s)
-        fig.text(0.5, 0.015, r.legend_text(), color="#9aa3ad", fontsize=5.5, ha="center")
-        fig.subplots_adjust(left=0.01, right=0.99, top=0.94, bottom=0.04)
+        fig.text(0.5, 0.012, r.legend_text(lines=2), color="#9aa3ad", fontsize=5.5, ha="center", linespacing=1.4)
+        fig.subplots_adjust(left=0.01, right=0.99, top=0.94, bottom=0.06)
         frames.append(_figure_to_image(fig).convert("P", palette=Image.ADAPTIVE, colors=128))
         plt.close(fig)
     frames[0].save(path, save_all=True, append_images=frames[1:], duration=int(1000 / fps), loop=0, optimize=True)
