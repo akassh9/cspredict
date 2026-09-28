@@ -39,7 +39,7 @@ def round_beliefs(ep: Episode, models: Models, model: str) -> np.ndarray:
     """(S, E, N) beliefs for one filter configuration."""
     cfg = next(c for c in ALL_CONFIGS if c.name == model)
     ev = gather_evidence(ep, models.grid, models.spot, models.fires)
-    beliefs = run_filter(ep, models.grid, models.motion, cfg, ev, models.library, models.teams)
+    beliefs = run_filter(ep, models.grid, models.motion, cfg, ev, models.library, models.teams, models.calibration)
     return np.stack([b.astype(np.float32) for _, b in beliefs])
 
 

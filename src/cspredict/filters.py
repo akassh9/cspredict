@@ -24,12 +24,15 @@ Configurations cover the learned filters and the baselines they are compared aga
                 keep some mass on every plausible spot so an unexpected route is never ruled out.
                 The grid motion avoids burning fires and the output is weighted by the fire
                 occupancy profile (fires.py). Once some enemy has been seen, each enemy's callout
-                probabilities are corrected by recorded whole-team snapshots (team.py).
+                probabilities are corrected by recorded whole-team snapshots (team.py). Finally
+                the callout probabilities are calibrated, by time since the enemy was last seen
+                (calibrate.py, fitted on validation).
     ens_nokill  ens without the kill-feed evidence (ablation)
 
 Named ablations (ABLATIONS, scored with evaluate --models) keep earlier versions and rejected
-variants runnable: ens_indep (ens before team coordination), ens_nofire (before fires), the
-weapon-matching variants, and the team and fire variants tried on validation.
+variants runnable: ens_uncal (ens before calibration), ens_indep (before team coordination),
+ens_nofire (before fires: the original ensemble), the weapon-matching variants, and the team and
+fire variants tried on validation.
 """
 
 from __future__ import annotations
@@ -39,6 +42,7 @@ from dataclasses import dataclass, field, replace
 
 import numpy as np
 
+from cspredict.calibrate import Calibration
 from cspredict.fires import FireModel
 from cspredict.grid import NavGrid
 from cspredict.infostate import Episode
@@ -68,8 +72,15 @@ class FilterConfig:
     fire_occ: bool = False  # output belief weighted by the occupancy profile around burning fires
     team: float = 0.0  # weight of the team-coordination correction of the output (team.py; 0 = off)
     team_params: TeamParams = TeamParams()
+    calibrated: bool = False  # apply the stored callout calibration (calibration.json) to the output
     seed: int = 0  # particle random seed (a second seed measures Monte Carlo noise)
 
+
+# The ensemble, one enhancement at a time; earlier stages stay runnable as named ablations.
+ENS_NOFIRE = FilterConfig("ens_nofire", "particles", negative=True, mix_hmm=0.15, mix_prior=0.10)
+ENS_INDEP = replace(ENS_NOFIRE, name="ens_indep", fire_mask=True, fire_occ=True)  # + fires; enemies independent
+ENS_UNCAL = replace(ENS_INDEP, name="ens_uncal", team=1.0, team_params=TeamParams(pseudo=100.0, after_contact=True))
+ENS = replace(ENS_UNCAL, name="ens", calibrated=True)  # + calibration.json, fitted on validation
 
 DEFAULT_CONFIGS = (
     FilterConfig("last_seen", "none", negative=False, kills=False),
@@ -80,20 +91,19 @@ DEFAULT_CONFIGS = (
     FilterConfig("hmm", "learned", negative=True),
     FilterConfig("pf_noneg", "particles", negative=False),
     FilterConfig("pf", "particles", negative=True),
-    ENS := replace(
-        ENS_INDEP := FilterConfig("ens_indep", "particles", negative=True, mix_hmm=0.15, mix_prior=0.10, fire_mask=True, fire_occ=True),
-        name="ens", team=1.0, team_params=TeamParams(pseudo=100.0, after_contact=True),
-    ),
+    ENS,
     replace(ENS, name="ens_nokill", kills=False),
 )
-_ENS = FilterConfig("ens_nofire", "particles", negative=True, mix_hmm=0.15, mix_prior=0.10)  # ens before fires
+_ENS = ENS_NOFIRE  # the weapon and fire variants were tried on the ensemble before fires
 # Variants scored only when named (evaluate --models), for validation ablations.
 ABLATIONS: tuple[FilterConfig, ...] = (
+    ENS_UNCAL,  # ens before calibration
+    ENS_INDEP,  # ens before team coordination: enemies tracked independently
+    ENS_NOFIRE,  # ens before fires (the ensemble as it was before these enhancements)
     *(replace(_ENS, name=f"ens_w{w}", weapon=w) for w in (0.7, 0.5, 0.3)),
     FilterConfig("hmm_weapon", "learned", negative=True, hmm_weapon=True),
     replace(_ENS, name="ens_hmmw", hmm_weapon=True),
     replace(_ENS, name="ens_w0.5_hmmw", weapon=0.5, hmm_weapon=True),
-    _ENS,
     replace(_ENS, name="ens_seed1", seed=1),
     *(replace(_ENS, name=f"ens_awp{w}", weapon=w, weapon_mode="awp") for w in (0.5, 0.3)),
     replace(_ENS, name="ens_guns0.5", weapon=0.5, weapon_mode="guns"),
@@ -101,7 +111,6 @@ ABLATIONS: tuple[FilterConfig, ...] = (
     replace(_ENS, name="ens_fire_wait", fire_mask=True, fire_wait=True, fire_occ=True),
     replace(_ENS, name="ens_fire_weight", fire_mask=True, fire_weight=True, fire_occ=True),
     FilterConfig("hmm_fire", "learned", negative=True, fire_mask=True, fire_occ=True),
-    ENS_INDEP,  # ens before team coordination: enemies tracked independently
     replace(ENS_INDEP, name="ens_seed1_fire", seed=1),
     replace(ENS_INDEP, name="ens_team", team=1.0),
     replace(ENS_INDEP, name="ens_team0.5", team=0.5),
@@ -178,7 +187,7 @@ def _apply_kills(b: np.ndarray, cfg: FilterConfig, ev: Evidence, s: int) -> np.n
     return b
 
 
-OUTPUT_OPTIONS = ("fire_occ", "team", "team_params")  # options that only reweight the output belief
+OUTPUT_OPTIONS = ("fire_occ", "team", "team_params", "calibrated")  # options that only reweight the output belief
 
 
 def _core(cfg: FilterConfig) -> FilterConfig:
@@ -194,6 +203,7 @@ def run_filters(
     ev: Evidence,
     library: TrajectoryLibrary | None = None,
     teams: TeamLibrary | None = None,
+    calibration: Calibration | None = None,
 ) -> Iterator[tuple[int, dict[str, np.ndarray]]]:
     """Yield (step, {config name: beliefs (E, N)}) for several configs at once. Configs that differ
     only in output options (OUTPUT_OPTIONS) share one run of the filter."""
@@ -202,7 +212,7 @@ def run_filters(
         groups.setdefault(_core(cfg), []).append(cfg)
     runs = [(_run_core(ep, grid, motion, core, ev, library), members) for core, members in groups.items()]
     planted = np.flatnonzero(ep.phase > 0)
-    post = _Post(ep, grid, ev, teams, float(ep.t_rel[planted[0]]) if len(planted) else None)
+    post = _Post(ep, grid, ev, teams, float(ep.t_rel[planted[0]]) if len(planted) else None, calibration, _since_seen(ep))
     for steps in zip(*(run for run, _ in runs)):
         s = steps[0][0]
         yield s, {cfg.name: _output(b, cfg, post, s) for (_, b), (_, members) in zip(steps, runs) for cfg in members}
@@ -216,9 +226,10 @@ def run_filter(
     ev: Evidence,
     library: TrajectoryLibrary | None = None,
     teams: TeamLibrary | None = None,
+    calibration: Calibration | None = None,
 ) -> Iterator[tuple[int, np.ndarray]]:
     """Yield (step, beliefs) with beliefs of shape (E, N) after each step's update."""
-    for s, beliefs in run_filters(ep, grid, motion, (cfg,), ev, library, teams):
+    for s, beliefs in run_filters(ep, grid, motion, (cfg,), ev, library, teams, calibration):
         yield s, beliefs[cfg.name]
 
 
@@ -231,11 +242,37 @@ class _Post:
     ev: Evidence
     teams: TeamLibrary | None
     plant_t: float | None  # round time of the plant, if any
+    calibration: Calibration | None = None
+    since: np.ndarray | None = None  # (S, E) seconds since each enemy was last on the radar, inf if never
+
+
+def _since_seen(ep: Episode) -> np.ndarray:
+    """(S, E) seconds since each enemy was last on the radar, at or before each step (inf if never)."""
+    out = np.full(ep.enemy_seen.shape, np.inf)
+    last = np.full(ep.enemy_seen.shape[1], np.nan)
+    for s in range(ep.n_steps):
+        last = np.where(ep.enemy_seen[s], ep.t_rel[s], last)
+        out[s] = np.where(np.isfinite(last), ep.t_rel[s] - last, np.inf)
+    return out
 
 
 def _output(b: np.ndarray, cfg: FilterConfig, post: _Post, s: int) -> np.ndarray:
-    """Output-only processing of a step's beliefs: team coordination, then fires."""
-    return _fire_output(_team_output(b, cfg, post, s), cfg, post.ev, s)
+    """Output-only processing of a step's beliefs: team coordination, fires, then calibration."""
+    return _calibrated_output(_fire_output(_team_output(b, cfg, post, s), cfg, post.ev, s), cfg, post, s)
+
+
+def _calibrated_output(b: np.ndarray, cfg: FilterConfig, post: _Post, s: int) -> np.ndarray:
+    """Rescale each enemy's cells so its callout probabilities follow the stored calibration (which
+    depends on how long ago the enemy was seen)."""
+    if not cfg.calibrated:
+        return b
+    if post.calibration is None:
+        raise ValueError(f"{cfg.name} needs calibration.json; run `python -m cspredict.calibrate`")
+    grid = post.grid
+    P = np.stack([np.bincount(grid.node_place_idx, row, len(grid.places)) for row in b])
+    Q = post.calibration.apply(P, post.since[s] if post.since is not None else None)
+    out = b * (Q / np.maximum(P, 1e-300))[:, grid.node_place_idx]
+    return out / out.sum(axis=1, keepdims=True)
 
 
 def _team_output(b: np.ndarray, cfg: FilterConfig, post: _Post, s: int) -> np.ndarray:

@@ -90,7 +90,7 @@ def score_episode(ep: Episode, models, configs: tuple[FilterConfig, ...]) -> tup
     team: dict[str, list] = {k: [] for k in ("model", "step", "n_hidden", "after_contact", "count_brier")}
     count_sums: dict[tuple[str, bool], np.ndarray] = {}  # (model, after contact) -> (n, expected, actual) per bin
     n_places = len(grid.places)
-    for s, beliefs in run_filters(ep, grid, models.motion, configs, ev, models.library, models.teams):
+    for s, beliefs in run_filters(ep, grid, models.motion, configs, ev, models.library, models.teams, models.calibration):
         es = np.flatnonzero(ep.enemy_alive[s] & ~ep.enemy_seen[s] & (ep.enemy_node[s] >= 0))
         if len(es) == 0:
             continue

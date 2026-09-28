@@ -16,6 +16,7 @@ from pathlib import Path
 
 from loguru import logger
 
+from cspredict.calibrate import Calibration
 from cspredict.config import MAP_NAME, MAPS_DIR
 from cspredict.dataset import list_demos, load_ticks
 from cspredict.fires import FireModel, fit_fire_model
@@ -34,6 +35,7 @@ class Models:
     library: TrajectoryLibrary
     fires: FireModel | None = None
     teams: TeamLibrary | None = None
+    calibration: Calibration | None = None
 
 
 PARTS = ("grid", "spot", "motion", "library", "fires", "team")
@@ -51,6 +53,7 @@ def load_models(path: Path) -> Models:
         library=TrajectoryLibrary.load(path / "library.npz"),
         fires=FireModel.load(path / "fires.npz") if (path / "fires.npz").exists() else None,
         teams=TeamLibrary.load(path / "team.npz") if (path / "team.npz").exists() else None,
+        calibration=Calibration.load(path / "calibration.json") if (path / "calibration.json").exists() else None,
     )
 
 
