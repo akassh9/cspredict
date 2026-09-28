@@ -18,7 +18,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
-bench = ["typesafe-sdk>=0.7"]  # typesafe_bench.py
+bench = ["typesafe-sdk>=0.7", "openai>=3.20"]  # typesafe_bench.py, jev_lab.py, frontier_bench.py
 
 [build-system]
 requires = ["setuptools>=68"]
