@@ -22,6 +22,9 @@ Configurations cover the learned filters and the baselines they are compared aga
     pf          trajectory-library particles + negative information + kills (see particles.py)
     ens         75% pf + 15% hmm + 10% prior_neg: particles give sharp routes, the other two
                 keep some mass on every plausible spot so an unexpected route is never ruled out.
+                Particles and team snapshots softly prefer recorded rounds with the enemy's buy,
+                as the friendly team can estimate it from the round history and the guns it has
+                seen (economy.py).
                 The grid motion avoids burning fires and the output is weighted by the fire
                 occupancy profile (fires.py). Once some enemy has been seen, each enemy's callout
                 probabilities are corrected by recorded whole-team snapshots (team.py). Finally
@@ -31,8 +34,10 @@ Configurations cover the learned filters and the baselines they are compared aga
 
 Named ablations (ABLATIONS, scored with evaluate --models) keep earlier versions and rejected
 variants runnable: ens_uncal (ens before calibration), ens_indep (before team coordination),
-ens_nofire (before fires: the original ensemble), the weapon-matching variants, and the team and
-fire variants tried on validation.
+ens_nofire (before fires: the original ensemble), the weapon-matching variants, the team and
+fire variants tried on validation, and the buy variants: ens_truebuy (the buy from the enemies'
+true equipment values, which the team cannot see: ens_uncal as it was before economy.py),
+ens_histbuy (round history only) and ens_nobuy (no buy preference).
 """
 
 from __future__ import annotations
@@ -45,6 +50,7 @@ import numpy as np
 from loguru import logger
 
 from cspredict.calibrate import Calibration
+from cspredict.economy import BuyModel
 from cspredict.fires import FireModel
 from cspredict.grid import NavGrid
 from cspredict.infostate import Episode
@@ -76,6 +82,10 @@ class FilterConfig:
     team_params: TeamParams = TeamParams()
     calibrated: bool = False  # apply the stored callout calibration (calibration.json) to the output
     seed: int = 0  # particle random seed (a second seed measures Monte Carlo noise)
+    # The enemy buy that particle and team matching prefer: "estimate" (round history and guns seen,
+    # economy.py), "history" (round history only), "true" (the enemies' equipment values, which the
+    # team cannot see; ablation) or "none".
+    buy: str = "estimate"
 
 
 # The ensemble, one enhancement at a time; earlier stages stay runnable as named ablations.
@@ -128,6 +138,11 @@ ABLATIONS: tuple[FilterConfig, ...] = (
       for p in (100, 300, 1000)),
     replace(ENS_INDEP, name="ens_team_p100c_l0.7", team=0.7, team_params=TeamParams(pseudo=100.0, after_contact=True)),
     replace(ENS_INDEP, name="ens_team_p100c_b0.7", team=1.0, team_params=TeamParams(pseudo=100.0, beta=0.7, after_contact=True)),
+    replace(ENS_UNCAL, name="ens_truebuy", buy="true"),  # ens_uncal before economy.py
+    replace(ENS_UNCAL, name="ens_histbuy", buy="history"),
+    replace(ENS_UNCAL, name="ens_nobuy", buy="none"),
+    replace(ENS_UNCAL, name="ens_uncal_seed1", seed=1),
+    replace(ENS_UNCAL, name="ens_truebuy_seed1", buy="true", seed=1),
 )
 ALL_CONFIGS = DEFAULT_CONFIGS + ABLATIONS
 
@@ -140,9 +155,12 @@ class Evidence:
     kills: dict[int, list[tuple[int, np.ndarray]]] = field(default_factory=dict)  # step -> [(enemy, K)]
     fire_step: dict[int, np.ndarray] = field(default_factory=dict)  # step -> (N,) move multiplier near fires
     fire_occ: dict[int, np.ndarray] = field(default_factory=dict)  # step -> (N,) occupancy likelihood near fires
+    buy: dict[str, np.ndarray] = field(default_factory=dict)  # "estimate" / "history" -> (S, 3) P(eco, force, full)
 
 
-def gather_evidence(ep: Episode, grid: NavGrid, spot: SpotModel, fires: FireModel | None = None) -> Evidence:
+def gather_evidence(
+    ep: Episode, grid: NavGrid, spot: SpotModel, fires: FireModel | None = None, buy: BuyModel | None = None
+) -> Evidence:
     unseen = np.empty((ep.n_steps, grid.n))
     for s in range(ep.n_steps):
         xyz, yaw, pitch = ep.observers(s)
@@ -158,6 +176,8 @@ def gather_evidence(ep: Episode, grid: NavGrid, spot: SpotModel, fires: FireMode
             if len(burning):
                 ev.fire_step[s] = fires.node_factors(grid, burning, "step")
                 ev.fire_occ[s] = fires.node_factors(grid, burning, "occupancy")
+    if buy is not None:
+        ev.buy = {"estimate": buy.posterior(ep), "history": buy.posterior(ep, weapons=False)}
     return ev
 
 
@@ -179,6 +199,19 @@ def _fire_output(b: np.ndarray, cfg: FilterConfig, ev: Evidence, s: int) -> np.n
         return b
     post = b * occ
     return post / post.sum(axis=1, keepdims=True)
+
+
+def _buy_belief(cfg: FilterConfig, ep: Episode, ev: Evidence) -> np.ndarray | None:
+    """(S, 3) P(eco, force, full) of the enemy team that particle and team matching assume at each
+    step, or None for no buy preference."""
+    if cfg.buy == "none":
+        return None
+    if cfg.buy == "true":
+        return np.tile(np.eye(3)[ep.enemy_buy_true], (ep.n_steps, 1))
+    if cfg.buy not in ev.buy:
+        _warn_once(f"no buy.json next to the models: {cfg.name} matches without the enemy buy (run `python -m cspredict.build --only buy`)")
+        return None
+    return ev.buy[cfg.buy]
 
 
 def _apply_kills(b: np.ndarray, cfg: FilterConfig, ev: Evidence, s: int) -> np.ndarray:
@@ -302,7 +335,8 @@ def _team_output(b: np.ndarray, cfg: FilterConfig, post: _Post, s: int) -> np.nd
             P[i, grid.node_place_idx[ep.enemy_seen_node[s, e]]] = 1.0
     phase = int(ep.phase[s])
     clock = float(ep.t_rel[s]) - (post.plant_t if phase > 0 and post.plant_t is not None else 0.0)
-    R = team_callouts(post.teams, SIDE_ID[ep.enemy], phase, clock, ep.enemy_buy, P, cfg.team_params)
+    buy = _buy_belief(cfg, ep, post.ev)
+    R = team_callouts(post.teams, SIDE_ID[ep.enemy], phase, clock, None if buy is None else buy[s], P, cfg.team_params)
     if R is None:
         return b
     corrected = b[alive] * R[:, grid.node_place_idx]
@@ -373,6 +407,7 @@ def _run_particle_filter(ep, grid, motion, cfg, ev, library) -> Iterator[tuple[i
         ep, grid, library, ev.unseen if cfg.negative else None, cfg.gamma,
         kills=ev.kills if cfg.kills else None, weapon_mismatch=cfg.weapon, weapon_mode=cfg.weapon_mode, seed=cfg.seed,
         fire_step=ev.fire_step if cfg.fire_wait else None, fire_weight=ev.fire_occ if cfg.fire_weight else None,
+        buy=_buy_belief(cfg, ep, ev),
     )  # fmt: skip
     if cfg.mix_hmm <= 0 and cfg.mix_prior <= 0:
         for s, b in particles:

@@ -6,7 +6,8 @@ belief. Here every particle instead follows a real trajectory from the training 
 passed through a similar state: same side, same or neighbouring node, similar heading, round
 time, bomb phase, time since that player was last spotted (a player who was just seen
 usually holds or falls back rather than running on), man advantage (a 1v3 plays differently
-from a 5v5), team buy, and preferably the same player. Particles are weighted by negative
+from a 5v5), team buy (recorded rounds store their true buy; the enemy's is the friendly team's
+estimate from economy.py), and preferably the same player. Particles are weighted by negative
 information and the kill feed like the grid filters, and are re-matched to a fresh trajectory
 when theirs ends (death or round end) and when resampling duplicates them.
 """
@@ -22,6 +23,7 @@ from scipy import sparse
 
 from cspredict.config import STEP_TICKS, TICKRATE
 from cspredict.dataset import DemoRef
+from cspredict.economy import buy_weights
 from cspredict.grid import NavGrid
 from cspredict.infostate import OTHER_WEAPON, WEAPON_CLASSES, Episode, buy_type
 from cspredict.motion import phase_expr, with_since_spotted
@@ -59,7 +61,7 @@ class Situation:
     since: float  # seconds since this enemy was last seen, inf if not yet this round
     n_team: int  # players alive on the enemy's side
     n_opp: int  # players alive on the friendly side
-    buy: int  # the enemy team's buy this round
+    buy: np.ndarray | None  # the enemy team's buy as P(eco, force, full); None for no buy preference
     player: int  # the enemy's steamid
     weapon: int = -1  # WEAPON_CLASSES index of the weapon in hand when last seen, -1 if never seen
 
@@ -135,7 +137,8 @@ class TrajectoryLibrary:
         w *= _since_weight(self.since[cand], sit.since)
         alive_gap = (self.n_team[cand] - sit.n_team) ** 2 + (self.n_opp[cand] - sit.n_opp) ** 2
         w *= np.exp(-0.5 * alive_gap / ALIVE_SIGMA**2)
-        w *= BUY_MISMATCH ** np.abs(self.buy[cand].astype(np.int64) - sit.buy)
+        if sit.buy is not None:
+            w *= buy_weights(sit.buy, BUY_MISMATCH)[self.buy[cand]]
         w *= np.where(self.player[cand] == sit.player, SAME_PLAYER, 1.0)
         if sit.weapon >= 0 and weapon_mismatch != 1.0:
             w *= _weapon_weight(self.weapon[cand], sit.weapon, weapon_mismatch, weapon_mode)
@@ -266,14 +269,17 @@ def run_particles(
     weapon_mode: str = "all",
     fire_step: dict[int, np.ndarray] | None = None,
     fire_weight: dict[int, np.ndarray] | None = None,
+    buy: np.ndarray | None = None,
 ):
     """Yield (step, beliefs (E, N)) like filters.run_filter. `kills` maps a step to
     (enemy, likelihood over nodes) pairs from the kill feed; `weapon_mismatch` weights recorded
-    states whose last-seen weapon class differs from the enemy's. `fire_step` maps a step to per-node
-    move multipliers near burning fires: a particle whose recorded path steps into fire waits at
-    the edge (it keeps its place in the recording) with probability 1 - m(next) / m(current).
-    `fire_weight` maps a step to per-node occupancy factors near fires that multiply the particle
-    weights like evidence, so particles standing in fire are resampled away."""
+    states whose last-seen weapon class differs from the enemy's. `buy` (S, 3) is the enemy team's
+    buy at each step as P(eco, force, full), for the soft buy preference (None: no preference).
+    `fire_step` maps a step to per-node move multipliers near burning fires: a particle whose
+    recorded path steps into fire waits at the edge (it keeps its place in the recording) with
+    probability 1 - m(next) / m(current). `fire_weight` maps a step to per-node occupancy factors
+    near fires that multiply the particle weights like evidence, so particles standing in fire are
+    resampled away."""
     rng = np.random.default_rng(seed)
     fire_rng = np.random.default_rng(seed + 1)  # separate stream: runs without fires stay identical
     side = SIDE_ID[ep.enemy]
@@ -290,7 +296,7 @@ def run_particles(
         return Situation(
             t=float(ep.t_rel[s]), phase=int(ep.phase[s]), since=since,
             n_team=int(ep.enemy_alive[s].sum()), n_opp=int(ep.obs_alive[s].sum()),
-            buy=ep.enemy_buy, player=int(ep.enemy_ids[e]), weapon=int(last_seen_weapon[e]),
+            buy=None if buy is None else buy[s], player=int(ep.enemy_ids[e]), weapon=int(last_seen_weapon[e]),
         )  # fmt: skip
 
     def rematch(e: int, which: np.ndarray, s: int) -> None:

@@ -1,4 +1,4 @@
-"""Fit the map grid, spotting model and motion models on the training demos.
+"""Fit the map grid, spotting model, motion models and the other fitted parts on the training demos.
 
 Usage:
     python -m cspredict.build --sources xego          # writes data/maps/de_mirage/xego/
@@ -19,6 +19,7 @@ from loguru import logger
 from cspredict.calibrate import Calibration
 from cspredict.config import MAP_NAME, MAPS_DIR
 from cspredict.dataset import list_demos, load_ticks
+from cspredict.economy import BuyModel, fit_buy_model
 from cspredict.fires import FireModel, fit_fire_model
 from cspredict.grid import NavGrid, build_grid
 from cspredict.motion import MotionModel, fit_motion_model
@@ -36,9 +37,10 @@ class Models:
     fires: FireModel | None = None
     teams: TeamLibrary | None = None
     calibration: Calibration | None = None
+    buy: BuyModel | None = None
 
 
-PARTS = ("grid", "spot", "motion", "library", "fires", "team")
+PARTS = ("grid", "spot", "motion", "library", "fires", "team", "buy")
 
 
 def model_dir(sources: list[str]) -> Path:
@@ -54,6 +56,7 @@ def load_models(path: Path) -> Models:
         fires=FireModel.load(path / "fires.npz") if (path / "fires.npz").exists() else None,
         teams=TeamLibrary.load(path / "team.npz") if (path / "team.npz").exists() else None,
         calibration=Calibration.load(path / "calibration.json") if (path / "calibration.json").exists() else None,
+        buy=BuyModel.load(path / "buy.json") if (path / "buy.json").exists() else None,
     )
 
 
@@ -87,6 +90,8 @@ def main() -> None:
         fit_fire_model(grid, MotionModel.load(out / "motion.npz"), train).save(out / "fires.npz")
     if "team" in args.only:
         build_team_library(grid, train).save(out / "team.npz")
+    if "buy" in args.only:
+        fit_buy_model(grid, train).save(out / "buy.json")
     (out / "train_demos.json").write_text(json.dumps([r.demo_id for r in train], indent=2))
     logger.info(f"Models written to {out} in {time.perf_counter() - start:.0f} s")
 

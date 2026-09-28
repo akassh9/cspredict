@@ -134,7 +134,13 @@ From validation ablations:
   record moved val callout log-loss by −0.001 (−0.006 to +0.005). In the 5 s after a teammate is
   flashed, cell log-loss improved by 0.029 (0.003 to 0.062).
 - **Features you proposed:**
-  - Buy type helps a little, but only when matched softly.
+  - Buy type helps a little, but only when matched softly. The numbers on this page took the enemy
+    team's buy from their true equipment values, which the other team can't see. The code now
+    estimates it from what the team knows: the round history (pistol round, wins, the loss-bonus
+    count) and the guns it has seen on the radar or in the kill feed (`economy.py`). The estimate
+    names the right class at 92% of the scored validation moments. Swapping it in changed nothing
+    beyond noise: callout log-loss −0.001 (−0.008 to +0.007) on validation, −0.002 (−0.008 to
+    +0.004) on test. `ens_truebuy` keeps the old version.
   - Man-advantage (1vX) and same-player matching did not help on the FACEIT data. Even soft
     versions left too few matching trajectories. Both are implemented but off and haven't been
     re-tested on the HLTV data yet.

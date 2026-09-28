@@ -243,7 +243,7 @@ def describe(ep: Episode, s: int, models: Models, unseen_s: np.ndarray) -> dict:
         "seconds_into_round": round(t),
         "bomb": bomb,
         "players_alive": {"your_team": int(ep.obs_alive[s].sum()), "enemies": int(ep.enemy_alive[s].sum())},
-        "enemy_team_buy": BUY_NAMES[ep.enemy_buy],
+        "enemy_team_buy": BUY_NAMES[ep.enemy_buy_true],  # true equipment values, as in the benchmark runs (the filters estimate it)
         "your_teammates": teammates,
         "callouts_your_team_is_watching": watched_now or ["none"],
         "enemies": enemies,

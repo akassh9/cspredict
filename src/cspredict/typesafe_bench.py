@@ -97,7 +97,7 @@ def collect_demo(args: tuple[DemoRef, Path, float, int]) -> list[dict]:
                 ever |= ep.enemy_seen[s]
             if not picks:
                 continue
-            ev = gather_evidence(ep, g, models.spot, models.fires)
+            ev = gather_evidence(ep, g, models.spot, models.fires, models.buy)
             wanted = {s for s, _ in picks}
             beliefs = {c.name: {} for c in cfgs}
             for c in cfgs:

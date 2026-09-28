@@ -7,8 +7,9 @@ probabilities with recorded team snapshots:
 
 1. Candidates. Snapshots of the enemy side's alive players (their callouts) from training rounds,
    taken every SNAP_EVERY_S seconds, in a similar situation: the same bomb phase, a similar clock
-   (round time before a plant, time since the plant after one), softly the same buy, and at least
-   as many players alive as enemies alive now.
+   (round time before a plant, time since the plant after one), softly the same buy (the friendly
+   team's estimate of the enemy's, economy.py), and at least as many players alive as enemies alive
+   now.
 2. Pairing. Our enemies are paired with a snapshot's players. A pairing is scored by how well each
    recorded player's callout fits the matching enemy's own belief, as a likelihood ratio
    L_e(c) = (P_e(c) / pi(c))^beta, where P_e is the per-enemy filter's callout belief and pi the
@@ -39,6 +40,7 @@ import polars as pl
 
 from cspredict.config import STEP_TICKS, TICKRATE
 from cspredict.dataset import DemoRef
+from cspredict.economy import buy_weights
 from cspredict.grid import NavGrid
 from cspredict.infostate import buy_type
 from cspredict.motion import phase_expr
@@ -148,10 +150,12 @@ class TeamParams:
 
 
 def team_callouts(
-    lib: TeamLibrary, side: int, phase: int, clock: float, buy: int, P: np.ndarray, params: TeamParams = TeamParams()
+    lib: TeamLibrary, side: int, phase: int, clock: float, buy: int | np.ndarray | None, P: np.ndarray,
+    params: TeamParams = TeamParams(),
 ) -> np.ndarray | None:
     """Correction factors R (k, C) for the callout beliefs P (k, C) of the k alive enemies, or
-    None when no recorded team fits. Multiply enemy e's cell belief in callout c by R[e, c]."""
+    None when no recorded team fits. Multiply enemy e's cell belief in callout c by R[e, c]. `buy` is
+    the enemy team's buy, a class or P(eco, force, full) (None: no buy preference)."""
     k, n_places = P.shape
     blk = lib.block(side, phase)
     clk = lib.clock[blk]
@@ -163,7 +167,8 @@ def team_callouts(
     if len(rows) > MAX_CANDIDATES:  # keep the clock-nearest
         rows = rows[np.argsort(np.abs(lib.clock[rows] - clock), kind="stable")[:MAX_CANDIDATES]]
     ctx = np.exp(-0.5 * ((lib.clock[rows] - clock) / params.clock_sigma) ** 2)
-    ctx *= BUY_MISMATCH ** np.abs(lib.buy[rows].astype(np.int64) - buy)
+    if buy is not None:
+        ctx *= buy_weights(buy, BUY_MISMATCH)[lib.buy[rows]]
     ctx *= params.extra_alive ** (lib.n_alive[rows].astype(np.int64) - k)
 
     # Usual occupancy of a recorded player in this situation.

@@ -41,7 +41,7 @@ HDR_MASS = 0.8  # heat shows the smallest set of cells holding this share of hid
 def round_beliefs(ep: Episode, models: Models, model: str) -> np.ndarray:
     """(S, E, N) beliefs for one filter configuration."""
     cfg = next(c for c in ALL_CONFIGS if c.name == model)
-    ev = gather_evidence(ep, models.grid, models.spot, models.fires)
+    ev = gather_evidence(ep, models.grid, models.spot, models.fires, models.buy)
     beliefs = run_filter(ep, models.grid, models.motion, cfg, ev, models.library, models.teams, models.calibration)
     return np.stack([b.astype(np.float32) for _, b in beliefs])
 

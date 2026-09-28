@@ -75,7 +75,7 @@ def score_episode(ep: Episode, models, configs: tuple[FilterConfig, ...]) -> tup
     """Per-sample scores, the full callout distributions of the mid/late-round samples, team-level
     scores per moment, and expected-vs-actual count sums for the count calibration."""
     grid = models.grid
-    ev = gather_evidence(ep, grid, models.spot, models.fires)
+    ev = gather_evidence(ep, grid, models.spot, models.fires, models.buy)
     ever, since, last_weapon = _sighting_history(ep)
     place_onehot = np.zeros((grid.n, len(grid.places)))
     place_onehot[np.arange(grid.n), grid.node_place_idx] = 1.0
