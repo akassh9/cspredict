@@ -61,9 +61,10 @@ The full tables, with 95% uncertainty ranges and every ablation, are in [docs/re
   alone (top-1 +1.2 points).
 - **A general-purpose AI can be coached, up to a point.** Given the same information, TypeSafe's Jev
   mostly repeats the last sighting. Facts computed in code plus movement rates from the training
-  rounds lifted its top-3 from 61% to 70%, but its first guess stayed at "last seen" level, and a
+  rounds lifted its top-3 from 63% to 71%, but its first guess stayed at "last seen" level, and a
   9-number formula on the same facts beat it. OpenAI's GPT-6 Luna, asked the same questions, did no
-  better: level with pushed Jev, still behind the formula, at 5 times the price and 50 times the wait.
+  better: level with pushed Jev, still behind the formula, at 5 to 8 times the price and about 50
+  times the wait.
   See [docs/jev.md](docs/jev.md).
 
 ## How it works

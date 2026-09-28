@@ -251,22 +251,18 @@ def gpt_probs(moments: list[dict], cache: dict[str, dict], variant: str, names: 
     return p, missing
 
 
-def metrics(p: np.ndarray, truth: np.ndarray, ties: str = "split") -> dict[str, np.ndarray]:
-    """Per-moment top-1 / top-3 hits and log-loss. ties="split": options tied with the truth share
-    the places they occupy, as if ties were broken at random; "miss": ties count against the model
-    (the Jev lab's rule)."""
-    if ties == "miss":
-        return _metrics(p, truth)
-    p = np.clip(p, EPS, None)
-    p = p / p.sum(axis=1, keepdims=True)
-    pt = p[np.arange(len(truth)), truth]
-    above = (p > pt[:, None]).sum(axis=1)
-    tied = (p == pt[:, None]).sum(axis=1)  # includes the truth itself
+def calibrated_gpt(moments: list[dict], grid, variant: str) -> np.ndarray | None:
+    """(n, C) GPT's calibrated callout probabilities for these moments, or None before the
+    validation run has fitted the calibration."""
+    cal_path = OUT / f"calibration_{variant}.json"
+    if not cal_path.exists() or not answers_path(variant).exists():
+        return None
+    since = np.array([m["evidence"]["seconds_since_seen"] for m in moments], dtype=float)
+    p, _ = gpt_probs(moments, _load_cache(answers_path(variant)), variant, callouts(grid))
+    return Calibration.load(cal_path).apply(np.clip(p, EPS, None), since)
 
-    def hit(k: int) -> np.ndarray:
-        return np.clip(k - above, 0, tied) / tied
 
-    return {"top1": hit(1), "top3": hit(3), "logloss": -np.log(pt)}
+metrics = _metrics  # ties get split credit by default (typesafe_bench._metrics)
 
 
 def score(named: dict[str, np.ndarray], truth: np.ndarray, clusters: np.ndarray, last_idx: np.ndarray, ties: str) -> pl.DataFrame:
@@ -407,7 +403,7 @@ def report(split: str, variants: list[str], workers: int) -> None:
     table.write_csv(OUT / f"results_{split}.csv")
     old = score(named, truth, clusters, last_idx, "miss")
     old.write_csv(OUT / f"results_{split}_ties_miss.csv")
-    print("\nThe Jev lab's rule (ties count as misses), for continuity with docs/jev.md:")
+    print("\nWith ties counted as misses (the rule of evaluate.py), to show how much the rule matters:")
     print(old.select("model", "top1", "top3", "logloss"))
 
     print("\nPaired differences (same moments; ties get split credit; 95% intervals resample whole rounds):")

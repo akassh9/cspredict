@@ -1,9 +1,16 @@
-# Benchmark: a general-purpose AI model (TypeSafe Jev)
+# Benchmark: general-purpose AI models (TypeSafe Jev, OpenAI GPT-6 Luna)
 
 [TypeSafe](https://docs.typesafe.ai/introduction)'s Jev (`jev-1.13.0`) is a "System One" model: it answers
 typed multiple-choice questions with a probability for every option, quickly and cheaply ($0.042 per
 million input tokens). This page asks how far it can be pushed on the question cspredict answers,
-"which of Mirage's 23 callouts is this hidden enemy in?", without cheating.
+"which of Mirage's 23 callouts is this hidden enemy in?", without cheating. It then asks OpenAI's
+GPT-6 Luna, a reasoning model, exactly the same questions.
+
+**Ties.** Both AI models round their probabilities: Jev to 0.01, and GPT writes out numbers like
+"30%, 30%". So on this page, options tied with the right answer share the credit, as if ties were
+broken at random. Two options tied for first each get half a top-1 hit. cspredict's own evaluation
+(`evaluate.py`) counts ties as misses, but its filters' probabilities don't tie. On these moments
+both rules give the same numbers for every filter. Only "last seen"'s top 3 moves, by 0.2 points.
 
 ## How far can Jev be pushed, honestly?
 
@@ -33,13 +40,13 @@ were fitted on validation. The code is `src/cspredict/jev_lab.py`.
 |---|---|---|---|---|
 | **cspredict** (our model) | **0.489** (0.459–0.522) | **0.739** | **1.648** | 59% |
 | Formula: 9 weights on the facts + movement rates, no Jev | 0.457 (0.425–0.490) | 0.710 | 1.819 | 75% |
-| Jev, split + movement rates, calibrated | 0.416 (0.387–0.449) | 0.703 | 1.944 | 40% |
-| Jev, split, calibrated | 0.416 | 0.683 | 2.023 | 75% |
-| Jev, focused, calibrated | 0.419 | 0.642 | 2.038 | 86% |
-| Jev, + travel times, calibrated | 0.404 | 0.629 | 2.182 | 76% |
-| Jev, plain, calibrated | 0.406 (0.375–0.443) | 0.605 | 2.180 | 84% |
-| Jev, plain, raw | 0.406 | 0.605 | 4.066 | 84% |
-| "Where I last saw them" | 0.420 (0.388–0.455) | 0.584 | 7.150 | 100% |
+| Jev, split + movement rates, calibrated | 0.417 (0.387–0.449) | 0.708 | 1.944 | 40% |
+| Jev, split, calibrated | 0.416 | 0.686 | 2.023 | 75% |
+| Jev, focused, calibrated | 0.419 | 0.666 | 2.038 | 86% |
+| Jev, + travel times, calibrated | 0.405 | 0.636 | 2.182 | 76% |
+| Jev, plain, calibrated | 0.407 (0.376–0.444) | 0.630 | 2.180 | 84% |
+| Jev, plain, raw | 0.407 | 0.630 | 4.066 | 84% |
+| "Where I last saw them" | 0.420 (0.388–0.455) | 0.586 | 7.150 | 100% |
 | Where that side usually is at this time | 0.233 | 0.466 | 2.589 | 19% |
 
 The enemy really is still in the callout where it was last seen in 42% of these moments.
@@ -51,11 +58,11 @@ What the numbers say:
   on validation, brings plain Jev's log-loss from 4.07 to 2.18.
 - **TypeSafe's playbook helps its probabilities, not its first guess.** Computing facts in code,
   focusing each question and splitting it into atomic questions improved log-loss step by step. But
-  per-option facts on their own mostly made Jev more sure of itself: top-3 rose a little (0.605 to
-  0.642) while its raw log-loss got worse (4.07 to 4.22).
+  per-option facts on their own mostly made Jev more sure of itself: top-3 rose a little (0.630 to
+  0.666) while its raw log-loss got worse (4.07 to 4.22).
 - **Knowing how players move breaks the anchoring.** With the movement rates, Jev picks the last-seen
-  callout 40% of the time, close to the true 42%. Its top-3 rises from 0.605 to 0.703, +9.8 points
-  (+7.8 to +11.6) over plain Jev, and log-loss falls by 0.24 (0.19 to 0.28). Its top-1 stays level with
+  callout 40% of the time, close to the true 42%. Its top-3 rises from 0.630 to 0.708, +7.8 points
+  (+5.9 to +9.6) over plain Jev, and log-loss falls by 0.24 (0.19 to 0.28). Its top-1 stays level with
   "last seen" (−0.003, −0.035 to +0.030). After 20 s it beats "last seen", but at 5–20 s, where
   staying put is still a good bet, it moves too eagerly.
 - **The same facts in a 9-number formula do better.** Pushed Jev trails the formula by 4.1 top-1
@@ -86,8 +93,7 @@ rules were written down before any GPT answer was collected; see
   and gave a probability for every option.
 - It ran at OpenAI's default reasoning setting ("medium"), with no tools and no web search.
 - Both models got the same calibration and the same blend with the formula, fitted on validation.
-- Ties get split credit for every model. The Jev lab counted them as misses, which cost Jev's plain
-  top-3 2.5 points (0.605 above, 0.630 here).
+- Ties get split credit for every model, as in the table above.
 - Two setups were chosen in advance, plain and split + movement rates, and the test moments were run
   once.
 
@@ -116,6 +122,9 @@ What the numbers say:
   It leaves the last-seen callout too soon: in the 5 s after a sighting it is right 62% of the time,
   against Jev's 68% and "last seen"'s 75%. Its percentages are a little more honest, but within noise
   (log-loss −0.039, −0.087 to +0.009).
+- **Luna's raw percentages are far more honest than Jev's.** Before calibration its log-loss is 2.22
+  with the plain description and 2.17 with the split questions, against Jev's 4.07 and 3.35. The
+  calibration closes most of that gap, which is why the calibrated log-losses end up level.
 - **Luna's reasoning helps only long after a sighting.** With the split questions, 40 s or more after
   a sighting, Luna is right 22% of the time, against Jev's 18% and "last seen"'s 15%.
 - **Neither AI beats the formula.** Given the same facts, the 9-number formula also beats Luna, by
@@ -143,6 +152,9 @@ python -m cspredict.frontier_bench --split test --budget 6
 Answers are cached in `outputs/frontier/`, and re-running only sends what is missing.
 
 ## First benchmark (the model before fires, team coordination and calibration)
+
+*Historical: these numbers come from an older model and from the old tie rule, which counted ties
+as misses. They are kept as they were first reported.*
 
 `typesafe_bench.py` asks [TypeSafe](https://docs.typesafe.ai/introduction)'s Jev (a hosted model that
 answers multiple-choice questions with probabilities) the same question our filters answer. It uses

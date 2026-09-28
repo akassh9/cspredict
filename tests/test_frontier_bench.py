@@ -47,7 +47,7 @@ def test_ties_get_split_credit():
     p = np.array([[0.4, 0.4, 0.2], [0.5, 0.3, 0.2], [0.2, 0.2, 0.2]])
     m = metrics(p, np.array([0, 1, 2]))
     np.testing.assert_allclose(m["top1"], [0.5, 0.0, 1 / 3])
-    np.testing.assert_allclose(metrics(p[:1], np.array([0]), ties="miss")["top1"], [0.0])  # the Jev lab's rule
+    np.testing.assert_allclose(metrics(p[:1], np.array([0]), ties="miss")["top1"], [0.0])  # the rule of evaluate.py
     q = np.array([[0.1, 0.3, 0.3, 0.3]])  # truth tied with two others for places 1-3
     assert metrics(q, np.array([1]))["top1"][0] == pytest.approx(1 / 3)
     assert metrics(q, np.array([1]))["top3"][0] == pytest.approx(1.0)

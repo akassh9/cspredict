@@ -367,10 +367,14 @@ def cross_validate(named: dict[str, np.ndarray], X: np.ndarray, truth: np.ndarra
 HORIZONS = ((0, 5, "0–5 s"), (5, 10, "5–10 s"), (10, 20, "10–20 s"), (20, 40, "20–40 s"), (40, np.inf, "40 s+"))
 
 
-def plot_by_horizon(moments: list[dict], grid, path: Path) -> None:
-    """Right callout by seconds since last seen: our model, the formula, pushed and plain Jev and
-    "last seen", on the cached answers (validation-fitted calibration and formula). The colours are
-    the first five categorical slots of the validated default palette (dataviz skill)."""
+def plot_by_horizon(moments: list[dict], grid, path: Path, luna: dict[str, np.ndarray] | None = None) -> None:
+    """Right callout named first, by seconds since last seen, in two panels: the plain description
+    and Jev's best questions (split + movement rates). Colour follows the model in both panels:
+    cspredict blue, Jev orange, GPT-6 Luna aqua. These are the first three categorical slots of the
+    validated default palette (dataviz skill), the only ones that stay apart for every pair and for
+    colour-blind readers; the no-AI references are gray. `luna` maps a variant to GPT's calibrated
+    probabilities (frontier_bench.calibrated_gpt), once that has run. Ties get split credit, and
+    calibration and the formula are fitted on validation."""
     import matplotlib
 
     matplotlib.use("Agg")
@@ -385,42 +389,60 @@ def plot_by_horizon(moments: list[dict], grid, path: Path) -> None:
         return Calibration.load(OUT / f"calibration_{v}.json").apply(np.clip(p, EPS, None), since)
 
     wr = np.array(list(json.loads((OUT / "formula_rates_weights.json").read_text()).values()))
-    series = {
-        "cspredict (my model)": ("#2a78d6", np.array([m["probs"]["ens"] for m in moments])),
-        "Jev, pushed (best honest setup)": ("#eb6834", jev("split_rates")),
-        "9-number formula, same facts, no AI": ("#1baf7a", _softmax(features(moments, grid, movement_rates(grid)), wr)),
-        "Jev, plain description": ("#eda100", jev("base")),
-        '"where I last saw them"': ("#e87ba4", np.array([m["probs"]["last_seen"] for m in moments])),
-    }
+    ens = np.array([m["probs"]["ens"] for m in moments])
+    last = np.array([m["probs"]["last_seen"] for m in moments])
+    luna = luna or {}
+    cs, jv, gpt, formula, last_seen = "cspredict (my model)", "Jev", "GPT-6 Luna", "9-number formula, same facts, no AI", '"where I last saw them"'
+    gray = "#8a8985"
+    style = {cs: ("#2a78d6", "-"), jv: ("#eb6834", "-"), gpt: ("#1baf7a", "-"), formula: (gray, "-"), last_seen: (gray, "--")}
+    panels = [
+        ("Plain description", {cs: ens, jv: jev("base"), **({gpt: luna["base"]} if "base" in luna else {}), last_seen: last}),
+        ("Jev's best questions: facts computed in code + movement rates", {
+            cs: ens, jv: jev("split_rates"), **({gpt: luna["split_rates"]} if "split_rates" in luna else {}),
+            formula: _softmax(features(moments, grid, movement_rates(grid)), wr), last_seen: last,
+        }),
+    ]  # fmt: skip
     surface, ink, ink2, grid_c = "#fcfcfb", "#0b0b0b", "#52514e", "#e7e6e2"
-    fig, ax = plt.subplots(figsize=(8.6, 5.4), dpi=200, facecolor=surface)
-    ax.set_facecolor(surface)
+    fig, axes = plt.subplots(1, 2, figsize=(10.4, 5.8), dpi=200, facecolor=surface, sharey=True)
     x = np.arange(len(HORIZONS))
     counts = [int(((since >= lo) & (since < hi)).sum()) for lo, hi, _ in HORIZONS]
-    for label, (color, p) in series.items():
-        top1 = _metrics(p, truth)["top1"]
-        ys = [100 * top1[(since >= lo) & (since < hi)].mean() for lo, hi, _ in HORIZONS]
-        ax.plot(x, ys, color=color, lw=2.0, marker="o", ms=6.5, mec=surface, mew=1.5, label=label, zorder=3)
-    ax.set_xticks(x, [h[2] for h in HORIZONS], color=ink2, fontsize=9)
-    ax.set_xlabel("seconds since the enemy was last seen", color=ink2, fontsize=9, labelpad=8)
-    ax.set_ylabel("right callout named first (of 23)", color=ink2, fontsize=9, labelpad=8)
-    ax.set_ylim(0, 85)
-    ax.set_xlim(-0.3, len(x) - 0.7)
-    ax.yaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, _: f"{v:.0f}%"))
-    ax.tick_params(axis="y", colors=ink2, labelsize=8.5, length=0)
-    ax.tick_params(axis="x", length=0)
-    ax.grid(axis="y", color=grid_c, lw=0.8, zorder=0)
-    for spine in ax.spines.values():
-        spine.set_visible(False)
-    ax.legend(frameon=False, fontsize=8.5, loc="upper right", labelcolor=ink, handlelength=2.2)
+    handles = {}
+    for ax, (title, series) in zip(axes, panels):
+        ax.set_facecolor(surface)
+        for label, p in series.items():
+            color, dash = style[label]
+            top1 = _metrics(p, truth)["top1"]
+            ys = [100 * top1[(since >= lo) & (since < hi)].mean() for lo, hi, _ in HORIZONS]
+            ref = color == gray
+            (handles[label],) = ax.plot(x, ys, color=color, ls=dash, lw=1.6 if ref else 2.0, marker="o", ms=4.5 if ref else 6.5,
+                                        mec=surface, mew=1.5, label=label, zorder=2 if ref else 3)  # fmt: skip
+        ax.set_title(title, loc="left", fontsize=10, color=ink, pad=8)
+        ax.set_xticks(x, [h[2] for h in HORIZONS], color=ink2, fontsize=8.5)
+        ax.set_xlabel("seconds since the enemy was last seen", color=ink2, fontsize=9, labelpad=8)
+        ax.set_ylim(0, 85)
+        ax.set_xlim(-0.3, len(x) - 0.7)
+        ax.yaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, _: f"{v:.0f}%"))
+        ax.tick_params(axis="y", colors=ink2, labelsize=8.5, length=0)
+        ax.tick_params(axis="x", length=0)
+        ax.grid(axis="y", color=grid_c, lw=0.8, zorder=0)
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+    axes[0].set_ylabel("right callout named first (of 23)", color=ink2, fontsize=9, labelpad=8)
+    order = [k for k in (cs, jv, gpt, formula, last_seen) if k in handles]
+    fig.legend([handles[k] for k in order], order, loc="upper left", bbox_to_anchor=(0.068, 0.895), ncol=len(order),
+               frameon=False, fontsize=8.5, labelcolor=ink, handlelength=2.2, columnspacing=1.8)  # fmt: skip
     fig.suptitle("Where is the enemy you can't see?", x=0.075, y=0.975, ha="left", fontsize=13, color=ink, weight="bold")
-    fig.text(0.075, 0.905, f"{len(moments):,} held-out pro moments on Mirage (CS2). Every model sees only what the team knew.",
+    fig.text(0.075, 0.915, f"{len(moments):,} held-out pro moments on Mirage (CS2). Every model sees only what the team knew.",
              ha="left", fontsize=9, color=ink2)
-    fig.text(0.075, 0.02, "Pushed Jev: one focused question per enemy, facts computed in code, and movement rates from "
-             "the training rounds; calibrated on validation rounds.\nFormula: 9 weights fitted on validation rounds, using the same "
-             f"facts. Each point is {min(counts):,}–{max(counts):,} moments, so gaps of a few points are within noise.",
-             ha="left", fontsize=7, color=ink2, linespacing=1.4)
-    fig.subplots_adjust(left=0.1, right=0.97, top=0.86, bottom=0.2)
+    lines = [
+        "Right: one focused question per enemy, with facts computed in code and movement rates from the training rounds (Jev's best setup).",
+        ("GPT-6 Luna got exactly the same questions as Jev, at OpenAI's default reasoning. " if luna else "")
+        + "The formula (right only) puts 9 weights on the same facts.",
+        "Calibration and the formula are fitted on validation rounds. "
+        f"Each point is {min(counts):,}–{max(counts):,} moments, so gaps of a few points are within noise.",
+    ]
+    fig.text(0.075, 0.022, "\n".join(lines), ha="left", fontsize=7, color=ink2, linespacing=1.5)
+    fig.subplots_adjust(left=0.075, right=0.985, top=0.79, bottom=0.21, wspace=0.07)
     fig.savefig(path, facecolor=surface)
     plt.close(fig)
 
@@ -459,7 +481,10 @@ def main() -> None:
     moments = load_moments(args.split, args.n or DEFAULT_N[args.split], args.seed, args.workers)
     grid = load_models(model_dir(["hltv", "xego"])).grid
     if args.chart:
-        plot_by_horizon(moments, grid, OUTPUT_DIR.parent / "docs" / "jev_by_horizon.png")
+        from cspredict.frontier_bench import calibrated_gpt  # here, not at the top: frontier_bench imports this module
+
+        luna = {v: p for v in ("base", "split_rates") if (p := calibrated_gpt(moments, grid, v)) is not None}
+        plot_by_horizon(moments, grid, OUTPUT_DIR.parent / "docs" / "jev_by_horizon.png", luna)
         return
     names = callouts(grid)
     truth = np.array([m["truth"] for m in moments])

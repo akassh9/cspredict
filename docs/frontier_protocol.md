@@ -191,3 +191,11 @@ The validation and test runs followed the protocol with no changes. The test mom
 - **Cost:** $6.20, against the pilot's projection of $6.46.
 - **Fingerprint:** a hash of every request, taken before the validation run, was identical after it
   and again after the test run.
+
+## After the results
+
+On 2026-09-28 the Jev lab's scorer (`typesafe_bench._metrics`) switched to split credit for ties too.
+So every Jev and GPT number in `docs/jev.md` and the paper now uses one rule. The runner still
+prints the old-rule table, but only to show how much the rule matters, not "for continuity" as
+planned above. None of this protocol's comparisons changed, because they already gave both models
+split credit.

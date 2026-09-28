@@ -227,13 +227,26 @@ async def _ask(requests: dict[str, dict], cache_path: Path, concurrency: int, pe
 
 
 # ---------------------------------------------------------------------- scoring
-def _metrics(p: np.ndarray, truth: np.ndarray) -> dict[str, np.ndarray]:
-    """Per-moment top-1 / top-3 hits and log-loss for callout distributions p (n, K)."""
+def _metrics(p: np.ndarray, truth: np.ndarray, ties: str = "split") -> dict[str, np.ndarray]:
+    """Per-moment top-1 / top-3 hits and log-loss for callout distributions p (n, K).
+
+    ties="split": options tied with the truth share the places they occupy, as if ties were broken
+    at random. The AI models round their probabilities (Jev to 0.01), so they tie often. "miss":
+    ties count against the model, the rule of evaluate.py, whose filters' continuous probabilities
+    almost never tie."""
     p = np.clip(p, EPS, None)
     p = p / p.sum(axis=1, keepdims=True)
     pt = p[np.arange(len(truth)), truth]
-    rank = (p >= pt[:, None]).sum(axis=1) - 1  # ties count against the model
-    return {"top1": (rank < 1).astype(float), "top3": (rank < 3).astype(float), "logloss": -np.log(pt)}
+    if ties == "miss":
+        rank = (p >= pt[:, None]).sum(axis=1) - 1
+        return {"top1": (rank < 1).astype(float), "top3": (rank < 3).astype(float), "logloss": -np.log(pt)}
+    above = (p > pt[:, None]).sum(axis=1)
+    tied = (p == pt[:, None]).sum(axis=1)  # includes the truth itself
+
+    def hit(k: int) -> np.ndarray:
+        return np.clip(k - above, 0, tied) / tied
+
+    return {"top1": hit(1), "top3": hit(3), "logloss": -np.log(pt)}
 
 
 def _cluster_ci(values: np.ndarray, clusters: np.ndarray, reps: int = 2000, seed: int = 0) -> tuple[float, float]:
