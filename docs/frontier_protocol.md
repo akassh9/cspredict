@@ -158,3 +158,26 @@ the wrapper or the settings:
 - There were 0 failures.
 - The longest output was 2,156 reasoning tokens, far below the 25,000 limit.
 - The pilot projects the full run at $6.46 at standard prices, or $3.23 on Flex.
+
+## Checks after the pilot
+
+- **Same requests after db1271d.** That commit rewrote the moment files just before the pilot ran,
+  with new cspredict probabilities but the same moments and descriptions. Verified:
+  - every request key is in Jev's cache
+  - the request sizes match the Jev run's log
+  - Jev's own input-token count is identical for all 200 pilot requests sent to Jev again
+- **Jev isn't deterministic.** When the same request was asked again, the largest change in any
+  probability had a median of 0.02 (max 0.15). So each model's answers are one draw, as the rules
+  already treat them.
+- **Both models give exact zeros.** Jev's probabilities are rounded to 0.01. On the 100 pilot
+  moments:
+
+  | | Plain | Pushed |
+  |---|---|---|
+  | Jev gives the true callout 0% | 23 | 17 |
+  | GPT gives the true callout 0% | 0 | 5 |
+  | Options at exactly 0% per answer, Jev | 15.6 of 23 | 16.8 |
+  | Options at exactly 0% per answer, GPT | 1.3 | 9.3 |
+
+  Zeros are floored at 1e-6 for both, as before, so raw log-loss punishes them and calibration can
+  soften them.
