@@ -39,8 +39,10 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
+from functools import lru_cache
 
 import numpy as np
+from loguru import logger
 
 from cspredict.calibrate import Calibration
 from cspredict.fires import FireModel
@@ -261,13 +263,19 @@ def _output(b: np.ndarray, cfg: FilterConfig, post: _Post, s: int) -> np.ndarray
     return _calibrated_output(_fire_output(_team_output(b, cfg, post, s), cfg, post.ev, s), cfg, post, s)
 
 
+@lru_cache(maxsize=None)
+def _warn_once(message: str) -> None:
+    logger.warning(message)
+
+
 def _calibrated_output(b: np.ndarray, cfg: FilterConfig, post: _Post, s: int) -> np.ndarray:
     """Rescale each enemy's cells so its callout probabilities follow the stored calibration (which
     depends on how long ago the enemy was seen)."""
     if not cfg.calibrated:
         return b
     if post.calibration is None:
-        raise ValueError(f"{cfg.name} needs calibration.json; run `python -m cspredict.calibrate`")
+        _warn_once(f"no calibration.json next to the models: {cfg.name} is uncalibrated (run `python -m cspredict.calibrate`)")
+        return b
     grid = post.grid
     P = np.stack([np.bincount(grid.node_place_idx, row, len(grid.places)) for row in b])
     Q = post.calibration.apply(P, post.since[s] if post.since is not None else None)

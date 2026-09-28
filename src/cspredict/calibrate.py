@@ -21,8 +21,9 @@ are left as they are (no validation samples were fitted for them).
 on all validation samples. It is stored next to the models (calibration.json) and applied by the
 filters to the final model's beliefs: each cell keeps its share of its callout.
 
-Usage:
-    python -m cspredict.calibrate --run outputs/eval_team2_val --model ens_team_p100c
+Usage (fit on the uncalibrated final model's validation run):
+    python -m cspredict.evaluate --train-sources hltv xego --sources hltv --split val --models ens_uncal --out outputs/eval_val
+    python -m cspredict.calibrate --train-sources hltv xego --run outputs/eval_val --model ens_uncal
 """
 
 from __future__ import annotations
@@ -164,7 +165,7 @@ def main() -> None:
     ap.add_argument("--run", type=Path, required=True, help="evaluate --out folder of a validation run")
     ap.add_argument("--model", required=True, help="filter config to calibrate")
     ap.add_argument("--split", default="val")
-    ap.add_argument("--train-sources", nargs="+", default=["hltv", "xego"])
+    ap.add_argument("--train-sources", nargs="+", default=["xego"], help="which fitted models to store it with")
     args = ap.parse_args()
 
     p, truth, since, clusters = arrays(args.run, args.split, args.model)

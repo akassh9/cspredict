@@ -27,11 +27,14 @@ from cspredict.config import CELL, FINE_CELL, OUTPUT_DIR  # noqa: E402
 from cspredict.dataset import list_demos  # noqa: E402
 from cspredict.filters import ALL_CONFIGS, gather_evidence, run_filter  # noqa: E402
 from cspredict.infostate import Episode, episodes  # noqa: E402
+from cspredict.visibility import SMOKE_RADIUS  # noqa: E402
 
 BG = "#15171c"
 FLOOR_COLOR = np.array([0.30, 0.32, 0.36])
 FRIEND = {"ct": "#5fa8ff", "t": "#f2b84b"}
 ENEMY = "#ff4d4d"
+SMOKE_COLOR = "#c8ced6"
+FIRE_COLOR = "#ff8c1a"
 HDR_MASS = 0.8  # heat shows the smallest set of cells holding this share of hidden-enemy probability
 
 
@@ -100,6 +103,11 @@ class RoundRenderer:
             rgba = self.cmap(0.3 + 0.7 * v)
             rgba[..., 3] = np.where(shown, 0.35 + 0.6 * np.sqrt(v), 0.0)
             ax.imshow(rgba, extent=self.extent, origin="lower", interpolation="nearest")
+        for x, y in ep.smokes[s]:
+            ax.add_patch(plt.Circle((x, y), SMOKE_RADIUS, color=SMOKE_COLOR, alpha=0.35, lw=0, zorder=3))
+        fire_r = self.m.fires.radius if self.m.fires is not None else 150.0
+        for x, y, _ in ep.fires[s]:
+            ax.add_patch(plt.Circle((x, y), fire_r, color=FIRE_COLOR, alpha=0.4, lw=0, zorder=3))
         for name, x, y in self.labels:
             ax.text(x, y, name, color="#c3c9d1", fontsize=4.5 if compact else 6, ha="center", va="center", alpha=0.75)
 
@@ -145,7 +153,8 @@ class RoundRenderer:
         truth = "   green x = true enemy position" if self.show_truth else ""
         return (
             f"{FRIEND_NAME[self.ep.friendly]} = your team + view direction   red dot = enemy on radar   "
-            f"ring = last seen (age){truth}   heat = most likely {HDR_MASS:.0%} of hidden-enemy probability"
+            f"ring = last seen (age){truth}   grey = smoke   orange = molotov   "
+            f"heat = most likely {HDR_MASS:.0%} of hidden-enemy probability"
         )
 
 
