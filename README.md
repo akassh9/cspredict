@@ -37,7 +37,9 @@ python3.12 -m venv .venv                             # Python 3.11–3.13; awpy 
 ```
 
 `review` writes `outputs/review/<demo>_r<round>_<side>_<model>.gif` and `.png`. Use `--truth` to
-overlay the real enemy positions, and `--model` to pick another filter (default `ens`).
+overlay the real enemy positions, and `--model` to pick another filter (default `ens`). To use the
+pro-trained models, add `--train-sources hltv xego` at the end of the command, after the demo id and
+round, because the option takes several values.
 
 ## Adding HLTV pro demos
 
@@ -46,7 +48,9 @@ HLTV sits behind a Cloudflare challenge, so download demos in your browser:
 1. On hltv.org, go to **Results** and filter the map to Mirage (add event or star filters if you like).
 2. Open a match and click **GOTV Demo**. You get one `.rar` per series.
 3. Put the `.rar` files in `data/raw/hltv/`.
-4. Run `python -m cspredict.parse`. It unpacks the archives with `bsdtar` and parses only the Mirage maps.
+4. Run `python -m cspredict.parse`. HLTV names each demo in a series `…-m<k>-<map>.dem`, so only the
+   Mirage demos are unpacked (with `bsdtar`) and the series' other maps stay in the archive. The map is
+   then confirmed from each demo's header.
 5. Train and score:
    - `python -m cspredict.build --sources hltv`, or `--sources hltv xego` to pool with the FACEIT data
    - `python -m cspredict.evaluate --train-sources hltv --split test`
@@ -56,7 +60,13 @@ add `data/raw/hltv/splits.csv` with columns `demo_id,split`.
 
 ## Data used so far
 
-Development used the 46 Mirage matches of **X-Ego-CS**
+**HLTV (pro):** 71 Mirage maps, one from each of 71 series downloaded from HLTV in September 2026.
+Events include CCT, ESEA, ESL Challenger League, iBuyPower Masters and Stake Pulse, so most teams are
+tier 2–3, with some tier 1. The stable hash split gives 47 / 8 / 16 train / val / test maps. The CS2
+patch is newer than the FACEIT set (14181–14185 vs 14094), but the Mirage layout matches: 99.9% of pro
+positions fall on cells the FACEIT data had already mapped.
+
+**FACEIT (development):** the 46 Mirage matches of **X-Ego-CS**
 ([paper](https://arxiv.org/abs/2510.19150), [data](https://huggingface.co/datasets/wangyz1999/X-EGO-CS), MIT).
 - These are FACEIT matches between top-100 FACEIT players, not pro teams, so strategies are less
   coordinated than in HLTV demos.
@@ -75,33 +85,61 @@ Development used the 46 Mirage matches of **X-Ego-CS**
 | Particle motion | `particles.py` | Each hypothesis follows a real recorded trajectory from a similar situation: same side, nearby cell, heading, round time, bomb phase, time since spotted, and (softly) the team's buy. This captures fast rotations that the grid model smears out. |
 | Filters | `filters.py` | Bayes filter per enemy: predict with a motion model; update on radar sightings, on "not on the radar", and on the kill feed (the killer must have had a sight line to the victim). `ens` = 75% particles + 15% grid + 10% "usual positions at this round time". |
 
-## Results (6 held-out matches, 48,876 samples)
+## Results
 
 A sample is an enemy who was seen earlier in the round and is off the radar now, which is the
-mid/late-round case. Higher is better except for log-loss.
+mid/late-round case. "Callout top-1" is how often the most likely of Mirage's 23 callouts is where the
+enemy really is. Higher is better except for log-loss. A uniform guess scores 3.14 callout log-loss
+and 7.58 cell log-loss.
+
+### Pro matches: 16 held-out HLTV maps, 102,486 samples
+
+The models were trained on 47 HLTV + 35 FACEIT maps (`build --sources hltv xego`).
 
 | Model | Callout top-1 | Callout log-loss | Cell log-loss | True cell in top 20 |
 |---|---|---|---|---|
-| **ens** (particles + grid + prior, all evidence) | **0.461** | **1.78** | **6.10** | 0.283 |
-| pf (particles) | 0.451 | 2.01 | 7.33 | 0.266 |
-| hmm (grid motion) | 0.447 | 2.70 | 7.33 | **0.296** |
-| diffuse (random walk, no learning) | 0.419 | 3.26 | 8.18 | 0.234 |
-| last_seen ("they're where I last saw them") | 0.378 | 7.83 | 16.77 | 0.048 |
-| prior (where that side usually is at this time) | 0.219 | 2.60 | 7.59 | 0.069 |
+| **ens** (particles + grid + prior, all evidence) | **0.478** | **1.69** | **5.86** | 0.314 |
+| pf (particles) | 0.470 | 1.87 | 6.92 | 0.295 |
+| hmm (grid motion) | 0.467 | 2.60 | 7.07 | **0.323** |
+| diffuse (random walk, no learning) | 0.443 | 3.03 | 7.86 | 0.242 |
+| last_seen ("they're where I last saw them") | 0.422 | 7.20 | 16.67 | 0.047 |
+| prior (where that side usually is at this time) | 0.213 | 2.61 | 7.26 | 0.091 |
 
-For reference, a uniform guess over the 1,949 cells has cell log-loss 7.58, and over the 23 callouts it has callout log-loss 3.14.
+For `ens` the true callout is in the top 3 72.6% of the time (prior: 45.1%). Its percentages are
+close to honest. For example, when it says 40–50% the enemy is there 39% of the time; at 70–80%,
+74%; at 90%+, 98%.
 
 Callout top-1 by seconds since the enemy was last seen (ens / last_seen / prior):
 
 | 0–2 s | 2–5 s | 5–10 s | 10–20 s | 20–40 s | 40 s+ |
 |---|---|---|---|---|---|
-| 0.89 / 0.88 / 0.19 | 0.70 / 0.64 / 0.18 | 0.50 / 0.41 / 0.21 | 0.35 / 0.27 / 0.23 | 0.26 / 0.16 / 0.24 | 0.19 / 0.04 / 0.25 |
+| 0.89 / 0.88 / 0.20 | 0.71 / 0.68 / 0.20 | 0.54 / 0.50 / 0.21 | 0.42 / 0.37 / 0.25 | 0.30 / 0.23 / 0.20 | 0.25 / 0.15 / 0.21 |
 
 Clutches with one friendly player left (callout top-1, ens / last_seen / prior):
 
 | 1v1 | 1v2 | 1v3 | 1v4 | 1v5 |
 |---|---|---|---|---|
-| 0.25 / 0.20 / 0.18 | 0.37 / 0.31 / 0.35 | 0.40 / 0.32 / 0.27 | 0.30 / 0.25 / 0.17 | 0.36 / 0.30 / 0.12 |
+| 0.59 / 0.43 / 0.36 | 0.53 / 0.42 / 0.35 | 0.50 / 0.38 / 0.31 | 0.38 / 0.34 / 0.16 | 0.39 / 0.39 / 0.13 |
+
+Which training data works best on the same 16 pro test maps (`ens`):
+
+| Trained on | Callout top-1 | Callout log-loss | Cell log-loss |
+|---|---|---|---|
+| FACEIT only (35 maps) | 0.460 | 1.77 | 6.18 |
+| HLTV only (47 maps) | 0.466 | 1.73 | 5.95 |
+| **Both (82 maps)** | **0.478** | **1.69** | **5.86** |
+
+### FACEIT development set: 6 held-out matches, 48,876 samples (FACEIT-only models)
+
+| Model | Callout top-1 | Callout log-loss | Cell log-loss |
+|---|---|---|---|
+| **ens** | **0.461** | **1.78** | **6.10** |
+| last_seen | 0.378 | 7.83 | 16.77 |
+| prior | 0.219 | 2.60 | 7.59 |
+
+Pro play is more predictable than FACEIT pugs. "Last seen" alone does better on pro matches (42% vs
+38%), because pros hold positions more, and the model's lead is largest in pro clutches (1v1: 59%
+vs 25% on FACEIT).
 
 What mattered, from validation ablations:
 - **Negative information** improves every motion model.
@@ -112,17 +150,18 @@ What mattered, from validation ablations:
   of the kill.
 - **Features you proposed:**
   - Buy type helps a little, but only when matched softly.
-  - Man-advantage (1vX) and same-player matching did not help on this FACEIT data. Even soft
-    versions left too few matching trajectories. Both are implemented but off; re-test them on HLTV
-    data, where teams are coordinated and the same players recur.
+  - Man-advantage (1vX) and same-player matching did not help on the FACEIT data. Even soft
+    versions left too few matching trajectories. Both are implemented but off and haven't been
+    re-tested on the HLTV data yet.
 - **Scoring rule:** "probability within 300 units of the truth" favours the point guess
   `last_seen`. It is not a proper scoring rule, so the headline numbers use log-loss and callout
   accuracy.
 
 ## Known limitations and next steps
 
-- **Pro data.** Everything above is FACEIT pugs. Pro teams run coordinated strategies, so HLTV
-  demos are the next step, and team-specific tendencies become learnable.
+- **More pro data.** 71 pro maps is still small, and teams recur across the train/test split.
+  Team-specific tendencies and the switched-off 1vX and player matching are worth re-testing as the
+  set grows.
 - **Sound.** Footsteps and gunshots aren't used yet. Gunfire in particular is heard map-wide in
   late-round fights and is probably the biggest remaining gain. Footsteps are already parsed.
 - **Identity.** Enemies are assumed identifiable when they appear on the radar.

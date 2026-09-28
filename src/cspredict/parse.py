@@ -16,8 +16,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -49,8 +51,19 @@ SMOKE_SECONDS = 18.0
 INFERNO_SECONDS = 7.0
 
 
+def _wanted(entry: str) -> bool:
+    """Whether an archive entry may be a MAP_NAME demo. HLTV names each demo in a series
+    "<team>-vs-<team>-m<k>-<map>.dem"; entries named differently are kept, and the map is
+    confirmed from each demo's header when parsing."""
+    if not entry.lower().endswith(".dem"):
+        return False
+    named = re.search(r"-m\d+-([a-z0-9_]+)\.dem$", entry.lower())
+    return named is None or MAP_NAME.removeprefix("de_") in named.group(1)
+
+
 def extract_archives(raw_dir: Path) -> None:
-    """Unpack .rar/.zip archives into a sibling folder named after the archive."""
+    """Unpack the MAP_NAME demos of each .rar/.zip archive into a sibling folder named after
+    the archive, skipping the series' other maps."""
     archives = sorted([*raw_dir.rglob("*.rar"), *raw_dir.rglob("*.zip")])
     if archives and shutil.which("bsdtar") is None:
         raise RuntimeError("bsdtar is needed to unpack demo archives (install libarchive)")
@@ -58,9 +71,13 @@ def extract_archives(raw_dir: Path) -> None:
         dest = archive.with_suffix("")
         if dest.exists():
             continue
+        listing = subprocess.run(["bsdtar", "-tf", str(archive)], check=True, capture_output=True, text=True)
+        entries = [e for e in listing.stdout.splitlines() if e.lower().endswith(".dem")]
+        wanted = [e for e in entries if _wanted(e)]
         dest.mkdir(parents=True)
-        subprocess.run(["bsdtar", "-xf", str(archive), "-C", str(dest)], check=True)
-        logger.info(f"Extracted {archive.name}")
+        if wanted:
+            subprocess.run(["bsdtar", "-xf", str(archive), "-C", str(dest), *wanted], check=True)
+        logger.info(f"Extracted {len(wanted)} of {len(entries)} demos from {archive.name}")
 
 
 def _existing(df: pl.DataFrame, cols: list[str]) -> list[str]:
@@ -175,6 +192,8 @@ def parse_demo(dem_path: Path, out_dir: Path, source: str, demo_id: str) -> dict
 
     start = time.perf_counter()
     dem = Demo(dem_path, tickrate=TICKRATE)
+    logger.remove()  # awpy.Demo drops every log handler when not verbose; restore ours
+    logger.add(sys.stderr, level="INFO")
     dem.parse(player_props=PLAYER_PROPS)
     ticks = _in_play_ticks(dem.ticks, dem.rounds)
     rounds = _fix_bomb_sites(dem.rounds, dem.bomb, ticks)
