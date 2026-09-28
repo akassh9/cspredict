@@ -99,7 +99,7 @@ def collect_demo(args: tuple[DemoRef, Path, float, int]) -> list[dict]:
             wanted = {s for s, _ in picks}
             beliefs = {c.name: {} for c in cfgs}
             for c in cfgs:
-                for s, b in run_filter(ep, g, models.motion, c, ev, models.library):
+                for s, b in run_filter(ep, g, models.motion, c, ev, models.library, models.teams):
                     if s in wanted:
                         beliefs[c.name][s] = b @ onehot
             labels = enemy_labels(ep)

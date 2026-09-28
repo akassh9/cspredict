@@ -52,7 +52,7 @@ def test_beliefs_are_distributions_and_collapse_on_sightings(models):
     ep = next(episodes(models.grid, refs[0], "ct"))
     ev = gather_evidence(ep, models.grid, models.spot, models.fires)
     for cfg in DEFAULT_CONFIGS:
-        for s, b in run_filter(ep, models.grid, models.motion, cfg, ev, models.library):
+        for s, b in run_filter(ep, models.grid, models.motion, cfg, ev, models.library, models.teams):
             assert b.shape == (len(ep.enemy_ids), models.grid.n)
             assert (b >= 0).all()
             np.testing.assert_allclose(b.sum(axis=1), 1.0, atol=1e-6)

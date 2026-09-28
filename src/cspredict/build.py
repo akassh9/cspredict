@@ -22,6 +22,7 @@ from cspredict.fires import FireModel, fit_fire_model
 from cspredict.grid import NavGrid, build_grid
 from cspredict.motion import MotionModel, fit_motion_model
 from cspredict.particles import TrajectoryLibrary, build_library
+from cspredict.team import TeamLibrary, build_team_library
 from cspredict.visibility import SpotModel, fit_spot_model
 
 
@@ -32,9 +33,10 @@ class Models:
     motion: MotionModel
     library: TrajectoryLibrary
     fires: FireModel | None = None
+    teams: TeamLibrary | None = None
 
 
-PARTS = ("grid", "spot", "motion", "library", "fires")
+PARTS = ("grid", "spot", "motion", "library", "fires", "team")
 
 
 def model_dir(sources: list[str]) -> Path:
@@ -48,6 +50,7 @@ def load_models(path: Path) -> Models:
         motion=MotionModel.load(path / "motion.npz"),
         library=TrajectoryLibrary.load(path / "library.npz"),
         fires=FireModel.load(path / "fires.npz") if (path / "fires.npz").exists() else None,
+        teams=TeamLibrary.load(path / "team.npz") if (path / "team.npz").exists() else None,
     )
 
 
@@ -79,6 +82,8 @@ def main() -> None:
         build_library(grid, train).save(out / "library.npz")
     if "fires" in args.only:
         fit_fire_model(grid, MotionModel.load(out / "motion.npz"), train).save(out / "fires.npz")
+    if "team" in args.only:
+        build_team_library(grid, train).save(out / "team.npz")
     (out / "train_demos.json").write_text(json.dumps([r.demo_id for r in train], indent=2))
     logger.info(f"Models written to {out} in {time.perf_counter() - start:.0f} s")
 

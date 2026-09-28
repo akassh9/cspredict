@@ -11,6 +11,10 @@ seen yet) are reported separately. Per sample:
     p_place      probability of the true callout (e.g. "Apartments"); place_nll = -log p_place
     place_top1/3 true callout among the 1 or 3 most likely callouts (ties count against the model)
 
+Team level, per moment with hidden enemies: the expected number of hidden enemies in each callout
+(the sum of their beliefs) against the actual number, scored by count_brier = sum over callouts of
+(expected - actual)^2. It is a proper score for the expected counts; lower is better.
+
 Intervals are 95% bootstrap intervals that resample whole rounds, because moments within a round
 are correlated. Differences between models are paired: every model is scored on the same samples,
 so the interval of "model minus reference" is much tighter than the two separate intervals.
@@ -44,6 +48,7 @@ NEAR = 300.0
 SINCE_BINS = [0, 2, 5, 10, 20, 40, np.inf]
 SINCE_LABELS = ["0-2s", "2-5s", "5-10s", "10-20s", "20-40s", "40s+"]
 CALIB_EDGES = (0.0, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0)
+COUNT_EDGES = (0.0, 0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 5.01)  # expected hidden enemies in a callout
 HEADLINE = ("place_top1", "place_top3", "place_nll", "nll")
 PROB_FLOOR = 1e-9  # callout probabilities are clipped here before taking logs
 
@@ -66,8 +71,9 @@ def _sighting_history(ep: Episode) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     return ever, since, weapon
 
 
-def score_episode(ep: Episode, models, configs: tuple[FilterConfig, ...]) -> tuple[pl.DataFrame, pl.DataFrame]:
-    """Per-sample scores, and the full callout distributions of the mid/late-round samples."""
+def score_episode(ep: Episode, models, configs: tuple[FilterConfig, ...]) -> tuple[pl.DataFrame, ...]:
+    """Per-sample scores, the full callout distributions of the mid/late-round samples, team-level
+    scores per moment, and expected-vs-actual count sums for the count calibration."""
     grid = models.grid
     ev = gather_evidence(ep, grid, models.spot, models.fires)
     ever, since, last_weapon = _sighting_history(ep)
@@ -77,11 +83,14 @@ def score_episode(ep: Episode, models, configs: tuple[FilterConfig, ...]) -> tup
     n_enemy = ep.enemy_alive.sum(axis=1)
 
     cols: dict[str, list] = {k: [] for k in (
-        "model", "step", "enemy", "t_rel", "seen_before", "since", "last_weapon", "n_friend", "n_enemy", "planted", "fire",
+        "model", "step", "enemy", "t_rel", "seen_before", "contact", "since", "last_weapon", "n_friend", "n_enemy", "planted", "fire",
         "p_true", "rank", "mass300", "exp_dist", "p_place", "place_true", "place_rank",
     )}  # fmt: skip
     probs: list[np.ndarray] = []
-    for s, beliefs in run_filters(ep, grid, models.motion, configs, ev, models.library):
+    team: dict[str, list] = {k: [] for k in ("model", "step", "n_hidden", "after_contact", "count_brier")}
+    count_sums: dict[tuple[str, bool], np.ndarray] = {}  # (model, after contact) -> (n, expected, actual) per bin
+    n_places = len(grid.places)
+    for s, beliefs in run_filters(ep, grid, models.motion, configs, ev, models.library, models.teams):
         es = np.flatnonzero(ep.enemy_alive[s] & ~ep.enemy_seen[s] & (ep.enemy_node[s] >= 0))
         if len(es) == 0:
             continue
@@ -89,6 +98,8 @@ def score_episode(ep: Episode, models, configs: tuple[FilterConfig, ...]) -> tup
         d = grid.dist[true]
         place_true = grid.node_place_idx[true]
         k = len(es)
+        actual = np.bincount(place_true, minlength=n_places)
+        contact = bool(ever[s].any())
         for name, b in beliefs.items():
             be = b[es]
             p_true = be[np.arange(len(es)), true]
@@ -99,6 +110,7 @@ def score_episode(ep: Episode, models, configs: tuple[FilterConfig, ...]) -> tup
             cols["enemy"].append(es)
             cols["t_rel"].append(np.full(k, ep.t_rel[s]))
             cols["seen_before"].append(ever[s, es])
+            cols["contact"].append(np.full(k, contact))  # some enemy has been seen this round
             cols["since"].append(since[s, es])
             cols["last_weapon"].append(last_weapon[s, es])
             cols["n_friend"].append(np.full(k, n_friend[s]))
@@ -113,15 +125,29 @@ def score_episode(ep: Episode, models, configs: tuple[FilterConfig, ...]) -> tup
             cols["place_true"].append(place_true)
             cols["place_rank"].append((pp >= p_place[:, None]).sum(axis=1) - 1)
             probs.append(pp[ever[s, es]].astype(np.float32))
+            expected = pp.sum(axis=0)
+            team["model"].append(name)
+            team["step"].append(s)
+            team["n_hidden"].append(k)
+            team["after_contact"].append(contact)
+            team["count_brier"].append(float(((expected - actual) ** 2).sum()))
+            acc = count_sums.setdefault((name, contact), np.zeros((3, len(COUNT_EDGES) - 1)))
+            bins = np.clip(np.searchsorted(COUNT_EDGES, expected, side="right") - 1, 0, len(COUNT_EDGES) - 2)
+            np.add.at(acc, (0, bins), 1.0)
+            np.add.at(acc, (1, bins), expected)
+            np.add.at(acc, (2, bins), actual)
     if not cols["model"]:
-        return pl.DataFrame(), pl.DataFrame()
-    df = pl.DataFrame({k: (v if k == "model" else np.concatenate(v)) for k, v in cols.items()})
-    df = df.with_columns(
-        pl.lit(ep.demo_id).alias("demo"), pl.lit(ep.round_num).alias("round"), pl.lit(ep.friendly).alias("friendly")
-    )
+        return pl.DataFrame(), pl.DataFrame(), pl.DataFrame(), pl.DataFrame()
+    tags = (pl.lit(ep.demo_id).alias("demo"), pl.lit(ep.round_num).alias("round"), pl.lit(ep.friendly).alias("friendly"))
+    df = pl.DataFrame({k: (v if k == "model" else np.concatenate(v)) for k, v in cols.items()}).with_columns(*tags)
     mid = df.filter(pl.col("seen_before")).select("model", "demo", "round", "friendly", "step", "enemy", "place_true")
     pp = np.concatenate(probs)
-    return df, mid.with_columns(pl.Series("place_probs", pp, dtype=pl.Array(pl.Float32, pp.shape[1])))
+    mid = mid.with_columns(pl.Series("place_probs", pp, dtype=pl.Array(pl.Float32, pp.shape[1])))
+    counts = pl.DataFrame(
+        [{"model": m, "after_contact": c, "bin": b, "n": a[0, b], "expected": a[1, b], "actual": a[2, b]}
+         for (m, c), a in count_sums.items() for b in range(a.shape[1]) if a[0, b] > 0]
+    )  # fmt: skip
+    return df, mid, pl.DataFrame(team).with_columns(*tags), counts
 
 
 def apply_overrides(overrides: tuple[str, ...]) -> None:
@@ -135,7 +161,7 @@ def apply_overrides(overrides: tuple[str, ...]) -> None:
         setattr(mod, name, type(getattr(mod, name))(float(value) if value.lower() != "inf" else np.inf))
 
 
-def score_demo(args: tuple[DemoRef, Path, tuple[FilterConfig, ...], tuple[str, ...]]) -> tuple[pl.DataFrame, pl.DataFrame]:
+def score_demo(args: tuple[DemoRef, Path, tuple[FilterConfig, ...], tuple[str, ...]]) -> tuple[pl.DataFrame, ...]:
     ref, models_path, configs, overrides = args
     apply_overrides(overrides)
     models = load_models(models_path)
@@ -145,9 +171,7 @@ def score_demo(args: tuple[DemoRef, Path, tuple[FilterConfig, ...], tuple[str, .
         for ep in episodes(models.grid, ref, friendly)
     ]
     out = [o for o in out if o[0].height]
-    if not out:
-        return pl.DataFrame(), pl.DataFrame()
-    return pl.concat([o[0] for o in out]), pl.concat([o[1] for o in out if o[1].height])
+    return tuple(pl.concat([o[i] for o in out if o[i].height]) if out else pl.DataFrame() for i in range(4))
 
 
 # ---------------------------------------------------------------------- reporting
@@ -180,13 +204,14 @@ def with_slices(df: pl.DataFrame) -> pl.DataFrame:
 
 
 def _metric_columns(df: pl.DataFrame) -> pl.DataFrame:
-    return df.with_columns(
-        (pl.col("place_rank") < 1).cast(pl.Float64).alias("place_top1"),
-        (pl.col("place_rank") < 3).cast(pl.Float64).alias("place_top3"),
-        (-pl.col("p_place").clip(PROB_FLOOR, 1.0).log()).alias("place_nll"),
-        (-pl.col("p_true").log()).alias("nll"),
-        pl.format("{}|{}", pl.col("demo"), pl.col("round")).alias("cluster"),
-    )
+    if "place_rank" in df.columns:
+        df = df.with_columns(
+            (pl.col("place_rank") < 1).cast(pl.Float64).alias("place_top1"),
+            (pl.col("place_rank") < 3).cast(pl.Float64).alias("place_top3"),
+            (-pl.col("p_place").clip(PROB_FLOOR, 1.0).log()).alias("place_nll"),
+            (-pl.col("p_true").log()).alias("nll"),
+        )
+    return df.with_columns(pl.format("{}|{}", pl.col("demo"), pl.col("round")).alias("cluster"))
 
 
 def intervals(
@@ -228,7 +253,7 @@ def intervals(
                 lo, hi = np.percentile(diff, [2.5, 97.5])
                 row |= {f"d_{m}": sums[j].sum() / n.sum() - rsums[j].sum() / rn.sum(), f"d_{m}_lo": lo, f"d_{m}_hi": hi}
         rows.append(row)
-    return pl.DataFrame(rows).sort("place_nll")
+    return pl.DataFrame(rows).sort(metrics[0], descending=metrics[0].endswith(("top1", "top3")))
 
 
 def format_intervals(table: pl.DataFrame, metrics: tuple[str, ...] = HEADLINE) -> str:
@@ -283,6 +308,31 @@ def sliced_differences(df: pl.DataFrame, by: str, ref: str, models: list[str]) -
     return "\n".join(sorted(out))
 
 
+def count_calibration(counts: pl.DataFrame, model: str, after_contact: bool = True) -> pl.DataFrame:
+    """Expected vs actual number of hidden enemies per callout, binned by the expected number."""
+    sub = counts.filter((pl.col("model") == model) & (pl.col("after_contact") == after_contact))
+    labels = [f"{lo:g}-{hi:g}" for lo, hi in zip(COUNT_EDGES[:-1], COUNT_EDGES[1:])]
+    return (
+        sub.group_by("bin").agg(pl.col("n").sum(), pl.col("expected").sum(), pl.col("actual").sum())
+        .sort("bin")
+        .select(pl.col("bin").replace_strict(dict(enumerate(labels)), return_dtype=pl.String).alias("model_expects"),
+                pl.col("n").cast(pl.Int64), (pl.col("expected") / pl.col("n")).alias("mean_expected"),
+                (pl.col("actual") / pl.col("n")).alias("mean_actual"))
+    )  # fmt: skip
+
+
+def report_team(team: pl.DataFrame, counts: pl.DataFrame, ref: str | None, focus: list[str]) -> None:
+    for contact, label in ((True, "after first contact"), (False, "before any enemy was seen")):
+        sub = team.filter(pl.col("after_contact") == contact)
+        if sub.height:
+            print(f"\n== Team level, {label}: squared error of expected hidden enemies per callout (lower is better) ==")
+            print(format_intervals(intervals(sub, ref, ("count_brier",)), ("count_brier",)))
+    for model in focus:
+        if counts.height and model in counts["model"].unique().to_list():
+            print(f"\n== {model}: expected vs actual hidden enemies in a callout (after first contact) ==")
+            print(count_calibration(counts, model))
+
+
 def report(df: pl.DataFrame, probs: pl.DataFrame, ref: str | None, focus: list[str], by: list[str] | None = None) -> None:
     pl.Config.set_tbl_rows(100)
     pl.Config.set_tbl_cols(20)
@@ -303,6 +353,10 @@ def report(df: pl.DataFrame, probs: pl.DataFrame, ref: str | None, focus: list[s
         print(sliced_differences(mid, col, ref, [m for m in df["model"].unique().to_list() if m != ref]))
     print("\n== Never seen yet this round ==")
     print(summarize(df.filter(~pl.col("seen_before"))))
+    if "contact" in df.columns:
+        never_after = df.filter(~pl.col("seen_before") & pl.col("contact"))
+        print(f"\n== Never seen themselves, but a teammate has been ({never_after.height // df['model'].n_unique():,} samples) ==")
+        print(format_intervals(intervals(never_after, ref)))
     if probs.height:
         for model in focus:
             table = calibration(probs, model)
@@ -310,9 +364,12 @@ def report(df: pl.DataFrame, probs: pl.DataFrame, ref: str | None, focus: list[s
             print(table)
 
 
-def load_samples(out: Path, split: str) -> tuple[pl.DataFrame, pl.DataFrame]:
-    probs = out / f"probs_{split}.parquet"
-    return pl.read_parquet(out / f"samples_{split}.parquet"), pl.read_parquet(probs) if probs.exists() else pl.DataFrame()
+def load_samples(out: Path, split: str) -> tuple[pl.DataFrame, ...]:
+    def read(name: str) -> pl.DataFrame:
+        path = out / f"{name}_{split}.parquet"
+        return pl.read_parquet(path) if path.exists() else pl.DataFrame()
+
+    return read("samples"), read("probs"), read("team"), read("counts")
 
 
 def main() -> None:
@@ -333,7 +390,10 @@ def main() -> None:
     args = ap.parse_args()
 
     if args.report is not None:
-        report(*load_samples(args.report, args.split), args.ref, args.focus, args.by)
+        df, probs, team, counts = load_samples(args.report, args.split)
+        report(df, probs, args.ref, args.focus, args.by)
+        if team.height:
+            report_team(team, counts, args.ref, args.focus)
         return
 
     models_path = model_dir(args.train_sources)
@@ -352,12 +412,15 @@ def main() -> None:
     with ProcessPoolExecutor(max_workers=args.workers) as pool:
         out = list(pool.map(score_demo, [(r, models_path, tuple(configs), tuple(args.set)) for r in refs]))
     df = with_slices(pl.concat([o[0] for o in out if o[0].height]))
-    probs = pl.concat([o[1] for o in out if o[1].height])
+    probs, team, counts = (pl.concat([o[i] for o in out if o[i].height]) for i in (1, 2, 3))
     args.out.mkdir(parents=True, exist_ok=True)
     df.write_parquet(args.out / f"samples_{args.split}.parquet")
     probs.write_parquet(args.out / f"probs_{args.split}.parquet")
+    team.write_parquet(args.out / f"team_{args.split}.parquet")
+    counts.write_parquet(args.out / f"counts_{args.split}.parquet")
     summarize(df.filter(pl.col("seen_before"))).write_csv(args.out / f"summary_{args.split}.csv")
     report(df, probs, args.ref, args.focus, args.by)
+    report_team(team, counts, args.ref, args.focus)
 
 
 if __name__ == "__main__":

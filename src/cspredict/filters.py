@@ -23,11 +23,13 @@ Configurations cover the learned filters and the baselines they are compared aga
     ens         75% pf + 15% hmm + 10% prior_neg: particles give sharp routes, the other two
                 keep some mass on every plausible spot so an unexpected route is never ruled out.
                 The grid motion avoids burning fires and the output is weighted by the fire
-                occupancy profile (fires.py).
+                occupancy profile (fires.py). Once some enemy has been seen, each enemy's callout
+                probabilities are corrected by recorded whole-team snapshots (team.py).
     ens_nokill  ens without the kill-feed evidence (ablation)
 
 Named ablations (ABLATIONS, scored with evaluate --models) keep earlier versions and rejected
-variants runnable, e.g. ens_nofire (ens before fires) and the weapon-matching variants.
+variants runnable: ens_indep (ens before team coordination), ens_nofire (before fires), the
+weapon-matching variants, and the team and fire variants tried on validation.
 """
 
 from __future__ import annotations
@@ -41,7 +43,8 @@ from cspredict.fires import FireModel
 from cspredict.grid import NavGrid
 from cspredict.infostate import Episode
 from cspredict.motion import N_TIME_BINS, TIME_BIN_S, MotionModel, context_key, since_bin
-from cspredict.particles import TrajectoryLibrary, run_particles
+from cspredict.particles import SIDE_ID, TrajectoryLibrary, run_particles
+from cspredict.team import TeamLibrary, TeamParams, team_callouts
 from cspredict.visibility import SpotModel
 
 FLOOR = 1e-6  # probability mass spread uniformly each step so no node is ever ruled out
@@ -63,6 +66,8 @@ class FilterConfig:
     fire_wait: bool = False  # particles whose recording walks into fire wait at the edge (ablation)
     fire_weight: bool = False  # particles re-weighted every step by fires.occupancy (ablation)
     fire_occ: bool = False  # output belief weighted by the occupancy profile around burning fires
+    team: float = 0.0  # weight of the team-coordination correction of the output (team.py; 0 = off)
+    team_params: TeamParams = TeamParams()
     seed: int = 0  # particle random seed (a second seed measures Monte Carlo noise)
 
 
@@ -75,8 +80,11 @@ DEFAULT_CONFIGS = (
     FilterConfig("hmm", "learned", negative=True),
     FilterConfig("pf_noneg", "particles", negative=False),
     FilterConfig("pf", "particles", negative=True),
-    FilterConfig("ens", "particles", negative=True, mix_hmm=0.15, mix_prior=0.10, fire_mask=True, fire_occ=True),
-    FilterConfig("ens_nokill", "particles", negative=True, kills=False, mix_hmm=0.15, mix_prior=0.10, fire_mask=True, fire_occ=True),
+    ENS := replace(
+        ENS_INDEP := FilterConfig("ens_indep", "particles", negative=True, mix_hmm=0.15, mix_prior=0.10, fire_mask=True, fire_occ=True),
+        name="ens", team=1.0, team_params=TeamParams(pseudo=100.0, after_contact=True),
+    ),
+    replace(ENS, name="ens_nokill", kills=False),
 )
 _ENS = FilterConfig("ens_nofire", "particles", negative=True, mix_hmm=0.15, mix_prior=0.10)  # ens before fires
 # Variants scored only when named (evaluate --models), for validation ablations.
@@ -93,6 +101,22 @@ ABLATIONS: tuple[FilterConfig, ...] = (
     replace(_ENS, name="ens_fire_wait", fire_mask=True, fire_wait=True, fire_occ=True),
     replace(_ENS, name="ens_fire_weight", fire_mask=True, fire_weight=True, fire_occ=True),
     FilterConfig("hmm_fire", "learned", negative=True, fire_mask=True, fire_occ=True),
+    ENS_INDEP,  # ens before team coordination: enemies tracked independently
+    replace(ENS_INDEP, name="ens_seed1_fire", seed=1),
+    replace(ENS_INDEP, name="ens_team", team=1.0),
+    replace(ENS_INDEP, name="ens_team0.5", team=0.5),
+    replace(ENS_INDEP, name="ens_team_b0.5", team=1.0, team_params=TeamParams(beta=0.5)),
+    replace(ENS_INDEP, name="ens_team_p100", team=1.0, team_params=TeamParams(pseudo=100.0)),
+    replace(ENS_INDEP, name="ens_team_p5", team=1.0, team_params=TeamParams(pseudo=5.0)),
+    replace(ENS_INDEP, name="ens_team_alive1", team=1.0, team_params=TeamParams(extra_alive=1.0)),
+    replace(ENS_INDEP, name="ens_team_c4", team=1.0, team_params=TeamParams(clock_sigma=4.0)),
+    replace(ENS_INDEP, name="ens_team_contact", team=1.0, team_params=TeamParams(after_contact=True)),
+    replace(ENS_INDEP, name="ens_team_b0.5_contact", team=1.0, team_params=TeamParams(beta=0.5, after_contact=True)),
+    replace(ENS_INDEP, name="ens_team_best", team=1.0, team_params=TeamParams(best_pairing=True)),
+    *(replace(ENS_INDEP, name=f"ens_team_p{p}c", team=1.0, team_params=TeamParams(pseudo=float(p), after_contact=True))
+      for p in (100, 300, 1000)),
+    replace(ENS_INDEP, name="ens_team_p100c_l0.7", team=0.7, team_params=TeamParams(pseudo=100.0, after_contact=True)),
+    replace(ENS_INDEP, name="ens_team_p100c_b0.7", team=1.0, team_params=TeamParams(pseudo=100.0, beta=0.7, after_contact=True)),
 )
 ALL_CONFIGS = DEFAULT_CONFIGS + ABLATIONS
 
@@ -154,7 +178,7 @@ def _apply_kills(b: np.ndarray, cfg: FilterConfig, ev: Evidence, s: int) -> np.n
     return b
 
 
-OUTPUT_OPTIONS = ("fire_occ",)  # options that only reweight the output belief, not the filter's state
+OUTPUT_OPTIONS = ("fire_occ", "team", "team_params")  # options that only reweight the output belief
 
 
 def _core(cfg: FilterConfig) -> FilterConfig:
@@ -169,6 +193,7 @@ def run_filters(
     cfgs: tuple[FilterConfig, ...],
     ev: Evidence,
     library: TrajectoryLibrary | None = None,
+    teams: TeamLibrary | None = None,
 ) -> Iterator[tuple[int, dict[str, np.ndarray]]]:
     """Yield (step, {config name: beliefs (E, N)}) for several configs at once. Configs that differ
     only in output options (OUTPUT_OPTIONS) share one run of the filter."""
@@ -176,9 +201,11 @@ def run_filters(
     for cfg in cfgs:
         groups.setdefault(_core(cfg), []).append(cfg)
     runs = [(_run_core(ep, grid, motion, core, ev, library), members) for core, members in groups.items()]
+    planted = np.flatnonzero(ep.phase > 0)
+    post = _Post(ep, grid, ev, teams, float(ep.t_rel[planted[0]]) if len(planted) else None)
     for steps in zip(*(run for run, _ in runs)):
         s = steps[0][0]
-        yield s, {cfg.name: _output(b, cfg, ev, s) for (_, b), (_, members) in zip(steps, runs) for cfg in members}
+        yield s, {cfg.name: _output(b, cfg, post, s) for (_, b), (_, members) in zip(steps, runs) for cfg in members}
 
 
 def run_filter(
@@ -188,15 +215,56 @@ def run_filter(
     cfg: FilterConfig,
     ev: Evidence,
     library: TrajectoryLibrary | None = None,
+    teams: TeamLibrary | None = None,
 ) -> Iterator[tuple[int, np.ndarray]]:
     """Yield (step, beliefs) with beliefs of shape (E, N) after each step's update."""
-    for s, beliefs in run_filters(ep, grid, motion, (cfg,), ev, library):
+    for s, beliefs in run_filters(ep, grid, motion, (cfg,), ev, library, teams):
         yield s, beliefs[cfg.name]
 
 
-def _output(b: np.ndarray, cfg: FilterConfig, ev: Evidence, s: int) -> np.ndarray:
-    """Output-only processing of a step's beliefs."""
-    return _fire_output(b, cfg, ev, s)
+@dataclass
+class _Post:
+    """What output processing needs besides the beliefs."""
+
+    ep: Episode
+    grid: NavGrid
+    ev: Evidence
+    teams: TeamLibrary | None
+    plant_t: float | None  # round time of the plant, if any
+
+
+def _output(b: np.ndarray, cfg: FilterConfig, post: _Post, s: int) -> np.ndarray:
+    """Output-only processing of a step's beliefs: team coordination, then fires."""
+    return _fire_output(_team_output(b, cfg, post, s), cfg, post.ev, s)
+
+
+def _team_output(b: np.ndarray, cfg: FilterConfig, post: _Post, s: int) -> np.ndarray:
+    """Mix in each alive enemy's belief rescaled by the team-coordination correction of its
+    callout probabilities (team.py). Enemies on the radar enter the matching with their callout known."""
+    ep, grid = post.ep, post.grid
+    if cfg.team <= 0 or post.teams is None:
+        return b
+    if cfg.team_params.after_contact and not post.ep.enemy_seen[: s + 1].any():
+        return b
+    alive = np.flatnonzero(ep.enemy_alive[s])
+    if len(alive) == 0:
+        return b
+    n_places = len(grid.places)
+    P = np.stack([np.bincount(grid.node_place_idx, b[e], n_places) for e in alive])
+    for i, e in enumerate(alive):
+        if ep.enemy_seen_node[s, e] >= 0:
+            P[i] = 0.0
+            P[i, grid.node_place_idx[ep.enemy_seen_node[s, e]]] = 1.0
+    phase = int(ep.phase[s])
+    clock = float(ep.t_rel[s]) - (post.plant_t if phase > 0 and post.plant_t is not None else 0.0)
+    R = team_callouts(post.teams, SIDE_ID[ep.enemy], phase, clock, ep.enemy_buy, P, cfg.team_params)
+    if R is None:
+        return b
+    corrected = b[alive] * R[:, grid.node_place_idx]
+    corrected /= corrected.sum(axis=1, keepdims=True)
+    out = b.copy()
+    out[alive] = (1 - cfg.team) * b[alive] + cfg.team * corrected
+    return out
 
 
 def _run_core(
