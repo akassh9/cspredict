@@ -109,8 +109,10 @@ def episodes(grid: NavGrid, ref: DemoRef, friendly: str) -> Iterator[Episode]:
         step_ticks = all_ticks[all_ticks % STEP_TICKS == 0]
         if len(step_ticks) < 2:
             continue
-        obs_ids = np.sort(rt.filter(pl.col("side") == friendly)["steamid"].unique().to_numpy())
-        enemy_ids = np.sort(rt.filter(pl.col("side") == enemy)["steamid"].unique().to_numpy())
+        # Only players alive at some point: demos also list disconnected players and substitutes.
+        playing = rt.filter(pl.col("is_alive"))
+        obs_ids = np.sort(playing.filter(pl.col("side") == friendly)["steamid"].unique().to_numpy())
+        enemy_ids = np.sort(playing.filter(pl.col("side") == enemy)["steamid"].unique().to_numpy())
         if len(obs_ids) == 0 or len(enemy_ids) == 0:
             continue
 

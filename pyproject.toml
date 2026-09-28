@@ -17,6 +17,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+bench = ["typesafe-sdk>=0.7"]  # typesafe_bench.py
 
 [build-system]
 requires = ["setuptools>=68"]
