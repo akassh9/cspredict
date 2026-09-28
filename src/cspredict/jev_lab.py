@@ -416,8 +416,8 @@ def plot_by_horizon(moments: list[dict], grid, path: Path) -> None:
     fig.suptitle("Where is the enemy you can't see?", x=0.075, y=0.975, ha="left", fontsize=13, color=ink, weight="bold")
     fig.text(0.075, 0.905, f"{len(moments):,} held-out pro moments on Mirage (CS2). Every model sees only what the team knew.",
              ha="left", fontsize=9, color=ink2)
-    fig.text(0.075, 0.02, "Pushed Jev: one focused question per enemy, facts computed in code, and pro movement rates from "
-             "training rounds; calibrated on validation rounds.\nFormula: 9 weights fitted on validation rounds, using the same "
+    fig.text(0.075, 0.02, "Pushed Jev: one focused question per enemy, facts computed in code, and movement rates from "
+             "the training rounds; calibrated on validation rounds.\nFormula: 9 weights fitted on validation rounds, using the same "
              f"facts. Each point is {min(counts):,}–{max(counts):,} moments, so gaps of a few points are within noise.",
              ha="left", fontsize=7, color=ink2, linespacing=1.4)
     fig.subplots_adjust(left=0.1, right=0.97, top=0.86, bottom=0.2)

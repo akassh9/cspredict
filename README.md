@@ -1,8 +1,8 @@
 # cspredict: where are they now?
 
 **Probability maps of where the enemies you can't see are, for Counter-Strike 2 demo review.**
-Trained on pro matches on Mirage. It uses only what one team knew during the round, and its
-percentages are honest: when it says 60–70%, the enemy is there 67% of the time.
+Trained on pro and top-level FACEIT matches on Mirage. It uses only what one team knew during the
+round, and its percentages are honest: when it says 60–70%, the enemy is there 67% of the time.
 
 ![A held-out pro round, seen from the CT side](docs/review_example.gif)
 
@@ -18,7 +18,7 @@ enemy is now. It is built only from what that team knew:
 - radar sightings, and where teammates stood and looked: a teammate who sees nobody is evidence too
 - smokes, flashes and burning molotovs
 - the kill feed and the bomb
-- how whole teams tend to be spread out, learned from recorded pro rounds
+- how whole teams tend to be spread out, learned from recorded rounds
 
 `review` renders any round as an animation or contact sheet. `evaluate` scores the maps against where
 the enemies really were.
@@ -43,9 +43,9 @@ The full tables, with 95% uncertainty ranges and every ablation, are in [docs/re
 
 ## What I found
 
-- **Learned movement and silence matter most.** Replaying real pro trajectories from similar
+- **Learned movement and silence matter most.** Replaying real recorded trajectories from similar
   situations beats a random walk by a wide margin (callout log-loss 1.88 vs 3.02). Treating "a
-  teammate is looking there and sees nobody" as evidence adds 1.4 to 2.2 points of accuracy to each
+  teammate is looking there and sees nobody" as evidence adds 1.5 to 2.1 points of accuracy to each
   motion model.
 - **Honest percentages need to know the time.** Right after a sighting the raw model is too unsure;
   20 s later it is too sure. One correction per horizon fixed both (calibration error 0.0040 →
@@ -59,9 +59,9 @@ The full tables, with 95% uncertainty ranges and every ablation, are in [docs/re
 - **More data beats purer data.** Pooling 35 FACEIT matches with the 47 pro maps beats the pro maps
   alone (top-1 +1.1 points).
 - **A general-purpose AI can be coached, up to a point.** Given the same information, TypeSafe's Jev
-  mostly repeats the last sighting. Facts computed in code plus pro movement rates lifted its top-3
-  from 61% to 70%, but its first guess stayed at "last seen" level, and a 9-number formula on the
-  same facts beat it. See [docs/jev.md](docs/jev.md).
+  mostly repeats the last sighting. Facts computed in code plus movement rates from the training
+  rounds lifted its top-3 from 61% to 70%, but its first guess stayed at "last seen" level, and a
+  9-number formula on the same facts beat it. See [docs/jev.md](docs/jev.md).
 
 ## How it works
 
@@ -72,7 +72,7 @@ A Bayes filter per enemy, updated every 0.25 s:
 2. **Learn the map from where players stand** (no nav mesh needed): about 2,000 cells of 64 units,
    and a spotting model fitted on 27 million observer–enemy pairs that says how likely each teammate
    was to see someone in each cell.
-3. **Predict movement two ways:** particles that replay recorded pro trajectories from similar
+3. **Predict movement two ways:** particles that replay recorded trajectories from similar
    situations, and a grid Markov model. Both depend on how long ago the enemy was seen, and both keep
    out of burning molotovs.
 4. **Update on the evidence:** sightings, "not on the radar" (negative information) and the kill feed.

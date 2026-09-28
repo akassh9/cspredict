@@ -53,7 +53,7 @@ What the numbers say:
   focusing each question and splitting it into atomic questions improved log-loss step by step. But
   per-option facts on their own mostly made Jev more sure of itself: top-3 rose a little (0.605 to
   0.642) while its raw log-loss got worse (4.07 to 4.22).
-- **Knowing how pros move breaks the anchoring.** With the movement rates, Jev picks the last-seen
+- **Knowing how players move breaks the anchoring.** With the movement rates, Jev picks the last-seen
   callout 40% of the time, close to the true 42%. Its top-3 rises from 0.605 to 0.703, +9.8 points
   (+7.8 to +11.6) over plain Jev, and log-loss falls by 0.24 (0.19 to 0.28). Its top-1 stays level with
   "last seen" (−0.003, −0.035 to +0.030). After 20 s it beats "last seen", but at 5–20 s, where

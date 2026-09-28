@@ -14,7 +14,8 @@ evaluation runs of the final code and data (`python -m cspredict.evaluate`, save
 A sample is an enemy who was seen earlier in the round and is off the radar now, which is the
 mid/late-round case. "Callout top-1" is how often the most likely of Mirage's 23 callouts is where the
 enemy really is. Higher is better except for log-loss. A uniform guess scores 3.14 callout log-loss
-and 7.58 cell log-loss.
+and 7.60 cell log-loss (ln 1,999 for the grid of the pooled models; 7.58 for the FACEIT-only grid of
+1,968 cells).
 
 ## Pro matches: 16 held-out HLTV maps, 102,486 samples
 
@@ -79,11 +80,12 @@ Clutches with one friendly player left (callout top-1, ens / ens before / last_s
 
 Against a clutcher facing four or five, the new model's log-loss is clearly better (−0.041 and
 −0.038). Its top-1 changes, from −0.010 in 1v3 to +0.013 in 1v4, are all within noise. Each slice
-holds only 44 to 98 rounds.
+holds only 40 to 98 rounds.
 
 **Enemies nobody has seen yet, and the team as a whole.** 246,000 test moments have an enemy who has
 not been on the radar yet while a teammate of theirs has. Their callout top-1 is 0.191 (0.175 before
-the team model; the plain prior also gets 0.191) and callout log-loss 2.576 (2.607; prior 2.600). At
+the team model; the prior with negative information also gets 0.191, the plain prior 0.188) and
+callout log-loss 2.576 (2.607 before the team model; 2.600 and 2.604 for the two priors). At
 the team level, the expected number of hidden enemies per callout (the sum of their probabilities)
 misses the actual count by a squared error of 2.91 per moment, against 2.93 before and 3.26 for the
 prior. It still underestimates stacks: where it expects 2–3 enemies in one callout there are 2.5 on
