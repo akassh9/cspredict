@@ -153,4 +153,8 @@ which is a third party to both TypeSafe and OpenAI.
 
 ## Changes
 
-None yet.
+None. The pilot (2026-09-28: 100 validation moments, 200 requests, $0.13) needed no change to
+the wrapper or the settings:
+- There were 0 failures.
+- The longest output was 2,156 reasoning tokens, far below the 25,000 limit.
+- The pilot projects the full run at $6.46 at standard prices, or $3.23 on Flex.
