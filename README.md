@@ -58,8 +58,10 @@ The full tables, with 95% uncertainty ranges and every ablation, are in [docs/re
   while they burn. Both are measured, reported and left switchable.
 - **More data beats purer data.** Pooling 35 FACEIT matches with the 47 pro maps beats the pro maps
   alone (top-1 +1.1 points).
-- **A general-purpose AI given the same information mostly repeats the last sighting.** See
-  [docs/jev.md](docs/jev.md).
+- **A general-purpose AI can be coached, up to a point.** Given the same information, TypeSafe's Jev
+  mostly repeats the last sighting. Facts computed in code plus pro movement rates lifted its top-3
+  from 61% to 70%, but its first guess stayed at "last seen" level, and a 9-number formula on the
+  same facts beat it. See [docs/jev.md](docs/jev.md).
 
 ## How it works
 

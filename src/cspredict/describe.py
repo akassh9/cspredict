@@ -15,6 +15,7 @@ from cspredict.build import Models
 from cspredict.config import STEP_TICKS, TICKRATE
 from cspredict.grid import NavGrid
 from cspredict.infostate import Episode
+from cspredict.motion import N_TIME_BINS, TIME_BIN_S, context_key
 
 BUY_NAMES = ("eco (little or no equipment)", "force buy (partial equipment)", "full buy")
 C4_TIMER_S = 40
@@ -111,6 +112,52 @@ def _place_means(grid: NavGrid, values: np.ndarray) -> dict[str, float]:
     return {callout_name(p): float(v) for p, v in zip(grid.places, totals / norm) if p != "Unknown"}
 
 
+def watched_by_step(grid: NavGrid, unseen: np.ndarray) -> np.ndarray:
+    """(S, C) per step, the traffic-weighted chance that an enemy standing in each callout (in
+    grid.places order) would have shown up on the team's radar."""
+    w = grid.node_count.astype(np.float64)
+    onehot = np.zeros((grid.n, len(grid.places)))
+    onehot[np.arange(grid.n), grid.node_place_idx] = w
+    return ((1.0 - unseen) @ onehot) / np.maximum(onehot.sum(axis=0), 1e-9)
+
+
+def enemy_evidence(ep: Episode, s: int, e: int, models: Models, watched: np.ndarray) -> dict:
+    """Facts about one off-radar enemy that the team could have worked out, computed in code and
+    keyed by readable callout: how likely the team was to spot someone there now and on average
+    since the enemy was last seen, and where that side's players usually are at this point of a
+    round (share of players per callout in the training demos). Plus the enemy's recent sightings.
+    `watched` is watched_by_step for the episode."""
+    grid = models.grid
+    names = [callout_name(p) for p in grid.places]
+    keep = [i for i, p in enumerate(grid.places) if p != "Unknown"]
+    seen_steps = np.flatnonzero(ep.enemy_seen[: s + 1, e])
+    s0 = int(seen_steps[-1])
+    since = watched[s0 + 1 : s + 1]
+    mean_since = since.mean(axis=0) if len(since) else watched[s]
+    tbin = min(int(ep.t_rel[s] // TIME_BIN_S), N_TIME_BINS - 1)
+    occ = models.motion.occupancy[context_key(ep.enemy, int(ep.phase[s]))][tbin].astype(np.float64)
+    usual = np.bincount(grid.node_place_idx, occ, len(grid.places))
+
+    # Recent sightings: each unbroken stretch on the radar, newest first.
+    runs = np.split(seen_steps, np.flatnonzero(np.diff(seen_steps) > 1) + 1)
+    history = []
+    for run in runs[::-1][:3]:
+        end = int(run[-1])
+        history.append({
+            "at": _place_of(grid, *ep.enemy_seen_xyz[end, e]),
+            "seconds_ago": round(float(ep.t_rel[s] - ep.t_rel[end])),
+            "seen_for_s": round(float(ep.t_rel[end] - ep.t_rel[int(run[0])]) + STEP_S, 1),
+        })  # fmt: skip
+    return {
+        "last_seen_at": history[0]["at"],
+        "seconds_since_seen": round(float(ep.t_rel[s] - ep.t_rel[s0])),
+        "spot_chance_now": {names[i]: float(watched[s, i]) for i in keep},
+        "spot_chance_since_seen": {names[i]: float(mean_since[i]) for i in keep},
+        "usual_share": {names[i]: float(usual[i]) for i in keep},
+        "history": history,
+    }
+
+
 def enemy_labels(ep: Episode) -> list[str]:
     side = ep.enemy.upper()
     return [f"{side}{i + 1}" for i in range(len(ep.enemy_ids))]
@@ -202,4 +249,5 @@ def describe(ep: Episode, s: int, models: Models, unseen_s: np.ndarray) -> dict:
         "enemies": enemies,
         "recent_kill_feed": kill_feed or ["no recent kills by enemies"],
         "smokes_active_at": sorted({_place_of(grid, x, y, 100.0) for x, y in ep.smokes[s]}) or ["none"],
+        "molotovs_burning_at": sorted({_place_of(grid, x, y, z) for x, y, z in ep.fires[s]}) or ["none"],
     }

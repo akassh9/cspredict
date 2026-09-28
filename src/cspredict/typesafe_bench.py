@@ -38,13 +38,15 @@ from cspredict.describe import (
     callout_run_times,
     callouts,
     describe,
+    enemy_evidence,
     enemy_labels,
+    watched_by_step,
 )
 from cspredict.filters import DEFAULT_CONFIGS, gather_evidence, run_filter
 from cspredict.infostate import episodes
 
 BASELINES = ("last_seen", "prior", "hmm", "pf", "ens")
-POPULATION = 102_486  # mid/late-round moments in the HLTV test split (evaluate.py)
+POPULATION = {"test": 102_486, "val": 63_906}  # mid/late-round moments per HLTV split (evaluate.py)
 PRICE_PER_MTOK = 0.042  # USD per million input tokens (docs.typesafe.ai/models)
 EPS = 1e-6
 
@@ -104,6 +106,7 @@ def collect_demo(args: tuple[DemoRef, Path, float, int]) -> list[dict]:
                         beliefs[c.name][s] = b @ onehot
             labels = enemy_labels(ep)
             states = {s: describe(ep, s, models, ev.unseen[s]) for s in wanted}
+            watched = watched_by_step(g, ev.unseen)
             for s, e in picks:
                 out.append({
                     "demo": ref.demo_id, "friendly": friendly, "round": ep.round_num, "step": s, "enemy": e,
@@ -113,13 +116,14 @@ def collect_demo(args: tuple[DemoRef, Path, float, int]) -> list[dict]:
                     "truth": int(g.node_place_idx[ep.enemy_node[s, e]]),
                     "probs": {name: beliefs[name][s][e].tolist() for name in beliefs},
                     "state": states[s],
+                    "evidence": enemy_evidence(ep, s, e, models, watched),
                 })  # fmt: skip
     return out
 
 
-def sample_moments(refs: list[DemoRef], models_path: Path, n: int, seed: int, workers: int) -> list[dict]:
+def sample_moments(refs: list[DemoRef], models_path: Path, n: int, seed: int, workers: int, split: str = "test") -> list[dict]:
     """Exactly n moments, uniform over the population, reproducible for a given seed."""
-    keep = min(1.0, 1.25 * n / POPULATION)  # oversample a little, then keep the n smallest draws
+    keep = min(1.0, 1.25 * n / POPULATION[split])  # oversample a little, then keep the n smallest draws
     with ProcessPoolExecutor(max_workers=workers) as pool:
         moments = [m for part in pool.map(collect_demo, [(r, models_path, keep, seed) for r in refs]) for m in part]
     moments.sort(key=lambda m: m["u"])
@@ -170,8 +174,10 @@ def _load_cache(path: Path) -> dict[str, dict]:
     return {row["key"]: row for row in map(json.loads, path.read_text().splitlines()) if row.get("answers")}
 
 
-async def _ask(requests: dict[str, dict], cache_path: Path, concurrency: int, per_second: float) -> None:
-    from typesafe_sdk import AsyncTypeSafeClient, Choice, RetryPolicy
+async def _ask(requests: dict[str, dict], cache_path: Path, concurrency: int, per_second: float, model: str | None = None) -> None:
+    """Send the requests not answered yet and append the answers to cache_path. A question is
+    {"type": "choice" | "noul", "instructions": ..., "criteria": ...}; `model` pins a Jev version."""
+    from typesafe_sdk import AsyncTypeSafeClient, Choice, Noul, RetryPolicy
 
     todo = [k for k in requests if k not in _load_cache(cache_path)]
     logger.info(f"{len(requests) - len(todo)} requests cached, {len(todo)} to send")
@@ -192,11 +198,11 @@ async def _ask(requests: dict[str, dict], cache_path: Path, concurrency: int, pe
                         await asyncio.sleep(wait)
                     req = requests[key]
                     questions = {
-                        label: Choice(instructions=q["instructions"], criteria=q["criteria"])
+                        label: (Noul if q.get("type") == "noul" else Choice)(instructions=q["instructions"], criteria=q["criteria"])
                         for label, q in req["questions"].items()
                     }
                     try:
-                        resp = await client.system_one(req["state"], questions)
+                        resp = await client.system_one(req["state"], questions, model=model)
                     except Exception as exc:
                         if done == 0 and failed == 0 and key == todo[0]:
                             raise  # the first request failing means the setup is wrong; stop here
@@ -204,8 +210,9 @@ async def _ask(requests: dict[str, dict], cache_path: Path, concurrency: int, pe
                         logger.warning(f"Request failed ({type(exc).__name__}: {exc}); will retry next run")
                         return
                     answers = {
-                        label: {"probabilities": a.probabilities, "choice": a.choice, "confidence": a.confidence}
-                        for label, a in resp.choices.items()
+                        label: {"noul": a.noul} if a.type == "noul"
+                        else {"probabilities": a.probabilities, "choice": a.choice, "confidence": a.confidence}
+                        for label, a in resp.answers.items()
                     }
                     usage = {"input_tokens": resp.usage.input_tokens, "output_tokens": resp.usage.output_tokens}
                     cache.write(json.dumps({"key": key, "model": resp.model, "answers": answers, "usage": usage}) + "\n")
@@ -304,7 +311,7 @@ def main() -> None:
     else:
         refs = list_demos(args.sources, [args.split])
         logger.info(f"Sampling {args.n} moments from {len(refs)} {args.split} demos and running the filters")
-        moments = sample_moments(refs, models_path, args.n, args.seed, args.workers)
+        moments = sample_moments(refs, models_path, args.n, args.seed, args.workers, args.split)
         moments_path.write_text(json.dumps(moments))
     grid = load_models(models_path).grid
     requests = build_requests(moments, grid, args.variant)
