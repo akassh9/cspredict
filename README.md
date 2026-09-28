@@ -61,7 +61,9 @@ HLTV sits behind a Cloudflare challenge, so download demos in your browser:
 3. Put the `.rar` files in `data/raw/hltv/`.
 4. Run `python -m cspredict.parse`. HLTV names each demo in a series `…-m<k>-<map>.dem`, so only the
    Mirage demos are unpacked (with `bsdtar`) and the series' other maps stay in the archive. The map is
-   then confirmed from each demo's header.
+   then confirmed from each demo's header. Most HLTV servers don't record the `player_blind` event, so
+   flashed players are rebuilt from each player's flash duration, which matches the event exactly on
+   demos that have both. `--refresh-blinds` redoes only this for demos parsed earlier (about 3 minutes).
 5. Train, calibrate and score:
    - `python -m cspredict.build --sources hltv`, or `--sources hltv xego` to pool with the FACEIT data
    - `python -m cspredict.evaluate --train-sources hltv --sources hltv --split val --models ens_uncal --out outputs/eval_val`,
@@ -209,6 +211,11 @@ What mattered, from validation ablations:
 - **Correct A/B bomb site** helps after the plant.
 - **Kill feed:** a small gain. It matters because 48% of killers are not on the radar at the moment
   of the kill.
+- **Flashed teammates:** no measurable change overall. A flashed player really does stop spotting
+  (from about a quarter of the flash's duration until 1.25× it), but only one mid/late-round moment in
+  eight has a teammate flashed now or in the last 5 s. Rebuilding the flashes that 55 HLTV maps don't
+  record moved val callout log-loss by −0.001 (−0.006 to +0.005). In the 5 s after a teammate is
+  flashed, cell log-loss improved by 0.029 (0.003 to 0.062).
 - **Features you proposed:**
   - Buy type helps a little, but only when matched softly.
   - Man-advantage (1vX) and same-player matching did not help on the FACEIT data. Even soft

@@ -11,6 +11,7 @@ Usage:
     python -m cspredict.parse           # parse every new demo under data/raw
     python -m cspredict.parse --force   # re-parse everything
     python -m cspredict.parse --refresh-grenades   # only recompute smoke/fire end ticks
+    python -m cspredict.parse --refresh-blinds     # only rebuild flashed players from the raw demos
 """
 
 from __future__ import annotations
@@ -206,6 +207,47 @@ def refresh_grenade_ends(out_dir: Path) -> None:
         _with_end_ticks(table.drop("end_tick"), parser, kind).write_parquet(path)
 
 
+def _flash_blinds(flash: pl.DataFrame, detonations: pl.DataFrame) -> pl.DataFrame:
+    """player_blind events rebuilt from every player's flash duration at every tick.
+
+    Most HLTV servers do not record that event. But a flash sets the pawn's m_flFlashDuration to
+    the event's blind_duration on the same tick (a new flash on a player who is still blind sets a
+    new value), and the value drops back to 0 once the flash wears off. On demos that do record the
+    event this reproduces every row that names a player. The thrower and the grenade's entity id
+    come from the flashbang that detonated on that tick.
+    """
+    prev = pl.col("flash_duration").shift(1).over("steamid").fill_null(0.0)
+    blinds = (
+        flash.sort("steamid", "tick")
+        .filter((pl.col("flash_duration") > 0) & (pl.col("flash_duration") != prev))
+        .select(
+            "tick",
+            pl.col("name").alias("user_name"),
+            pl.col("steamid").cast(pl.String).alias("user_steamid"),
+            pl.col("flash_duration").alias("blind_duration"),
+        )
+    )
+    if "entityid" in detonations.columns:
+        throwers = detonations.unique("tick", keep="first", maintain_order=True).select(  # two on one tick: rare
+            "tick", "entityid", pl.col("user_name").alias("attacker_name"), pl.col("user_steamid").alias("attacker_steamid")
+        )
+        blinds = blinds.join(throwers, on="tick", how="left")
+    return blinds
+
+
+def _blinds(parser: DemoParser) -> pl.DataFrame:
+    """Every flash on every player (see _flash_blinds)."""
+    return _flash_blinds(pl.from_pandas(parser.parse_ticks(["flash_duration"])), _event(parser, "flashbang_detonate"))
+
+
+def refresh_blinds(out_dir: Path) -> None:
+    """Rebuild a parsed demo's blinds table from its raw demo (only the flash durations and the
+    flashbang detonations are read, so this takes seconds instead of a full re-parse)."""
+    parser = DemoParser(json.loads((out_dir / "meta.json").read_text())["file"])
+    rounds = pl.read_parquet(out_dir / "rounds.parquet")
+    _with_round(_blinds(parser), rounds).write_parquet(out_dir / "blinds.parquet")
+
+
 def parse_demo(dem_path: Path, out_dir: Path, source: str, demo_id: str) -> dict | None:
     """Parse one demo into out_dir. Returns its metadata, or None if it is not on MAP_NAME."""
     parser = DemoParser(str(dem_path))
@@ -246,7 +288,7 @@ def parse_demo(dem_path: Path, out_dir: Path, source: str, demo_id: str) -> dict
         ),
         rounds,
     )
-    blinds = _with_round(_event(parser, "player_blind"), rounds)
+    blinds = _with_round(_blinds(parser), rounds)
 
     tables = {
         "rounds": rounds,
@@ -284,12 +326,16 @@ def main() -> None:
     ap.add_argument("--raw", type=Path, default=RAW_DIR, help="folder holding <source>/<demos>")
     ap.add_argument("--force", action="store_true", help="re-parse demos that were already parsed")
     ap.add_argument("--refresh-grenades", action="store_true", help="only recompute smoke and fire end ticks of parsed demos")
+    ap.add_argument("--refresh-blinds", action="store_true", help="only rebuild the flashed players of parsed demos")
     args = ap.parse_args()
 
-    if args.refresh_grenades:
+    if args.refresh_grenades or args.refresh_blinds:
         for meta in sorted(PARSED_DIR.glob("*/*/meta.json")):
-            refresh_grenade_ends(meta.parent)
-            logger.info(f"Refreshed grenade end ticks of {meta.parent.parent.name}/{meta.parent.name}")
+            if args.refresh_grenades:
+                refresh_grenade_ends(meta.parent)
+            if args.refresh_blinds:
+                refresh_blinds(meta.parent)
+            logger.info(f"Refreshed {meta.parent.parent.name}/{meta.parent.name}")
         return
 
     extract_archives(args.raw)
