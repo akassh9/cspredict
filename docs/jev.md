@@ -151,6 +151,94 @@ python -m cspredict.frontier_bench --split test --budget 6
 
 Answers are cached in `outputs/frontier/`, and re-running only sends what is missing.
 
+## Jev's answers as inputs to cspredict
+
+TypeSafe's [feature-discovery cookbook](https://docs.typesafe.ai/cookbooks/autoresearch_feature_discovery)
+uses Jev differently: not for the final answer, but to answer small questions whose answers feed
+another model, which learns how much each one is worth. Jev's overconfidence then doesn't matter. Four
+tests asked whether that works here, with cspredict as the model on top.
+
+**Setup.** A small model (the same shape as the 9-weight formula: a softmax over the 23 callouts)
+starts from cspredict's probabilities and learns a weight for each extra input. Its fair comparison is
+a control that gets the same model with only facts computed in code (the formula's facts, movement
+rates and travel times), no Jev. Everything is scored on validation moments held out over folds of
+whole rounds; no test moment was used. Jev sees only what the team knew, as before. The code is
+`src/cspredict/jev_features.py`.
+
+| Test | What Jev was asked | Moments |
+|---|---|---|
+| Feature questions (pilot) | five small questions per enemy, written before any answer was seen: still where last seen? heading for A, for B, toward us, holding or falling back? how aggressive? lurking? how far moved? | 300 |
+| Existing answers | none new: the split + movement rates answers from the lab above | 2,000 |
+| Role-play | the focus question with one change, "you are T1, a pro T player: where would you be?" | 2,000 |
+| Match context | role-play plus the basics of the game, the score, the last five results and the player's match so far (kills, deaths, opening duels, main weapon); then also where the team had spotted this player in earlier rounds on the same side | 2,000 |
+
+**Results** (95% intervals resample whole rounds; negative log-loss = better):
+
+| Comparison | Moments | Callout top-1 | Log-loss |
+|---|---|---|---|
+| Code facts on top of cspredict, vs cspredict alone (no Jev) | 2,000 | +1.1 points (−0.2 to +2.5) | **−0.034** (−0.055 to −0.014) |
+| + existing Jev answers, vs code facts | 2,000 | +0.1 (−0.6 to +0.8) | +0.001 (−0.003 to +0.005) |
+| + the five feature questions, vs code facts | 300 | +0.7 (−1.6 to +3.6) | +0.017 (−0.012 to +0.046) |
+| + role-play pick, vs code facts | 2,000 | +0.3 (−0.5 to +1.0) | −0.000 (−0.003 to +0.003) |
+| Habit counts in code, vs code facts (no Jev) | 2,000 | +0.4 (−0.6 to +1.1) | −0.002 (−0.009 to +0.005) |
+| + pick with basics, score and stats, vs code facts + habits | 2,000 | −0.3 (−0.8 to +0.3) | +0.001 (−0.001 to +0.003) |
+| + pick with habits too, vs code facts + habits | 2,000 | −0.3 (−0.5 to +0.0) | +0.001 (+0.000 to +0.002) |
+
+How much the model trusts Jev's pick (the odds of the callout Jev picks are multiplied by this; ×1
+means ignored):
+
+| Jev's pick | On cspredict alone | On cspredict + code facts (+ habits) |
+|---|---|---|
+| Focus ("which callout is T1 in?") | | ×0.99 (0.76 to 1.35) |
+| Role-play | ×1.33 (1.11 to 1.60) | ×1.14 (0.92 to 1.41); with habits ×1.12 |
+| With basics, score and stats | | ×1.08 (0.90 to 1.31) |
+| With habits too | ×1.22 (1.03 to 1.46) | ×1.02 (0.84 to 1.28) |
+
+Jev on its own (raw answers, same 2,000 moments):
+
+| | Top-1 | Top 3 | Raw log-loss | Picks the last-seen callout |
+|---|---|---|---|---|
+| Focus: "which callout is enemy T1 in?" | 0.386 | 0.634 | 4.65 | 88% |
+| Role-play: "you are T1, where would you be?" | 0.387 | 0.654 | 2.99 | 49% |
+| + basics, score, the player's match | 0.382 | 0.645 | 3.04 | 49% |
+| + where the team has seen this player before | 0.385 | 0.638 | 3.12 | 58% |
+
+The enemy really is still in the last-seen callout in 39% of these moments.
+
+What the numbers say:
+- **Jev adds nothing once cspredict is in the model.** Jev's best answers, which improved the formula
+  by 0.034 above, add +0.001 (−0.003 to +0.005) here. Whatever Jev read that the formula's nine
+  numbers missed, cspredict already knows.
+- **Asking better questions doesn't change that.** The five feature questions come out slightly worse,
+  as eleven extra weights fitted on 300 moments do when they carry no signal.
+- **Role-play changes how Jev plays, not how often it is right.** One sentence of framing cuts its
+  picks of the last-seen callout from 88% to 49%, close to the true 39%, and its raw log-loss from 4.65
+  to 2.99. Its first guess is unchanged (+0.1 points, −2.9 to +3.1). On cspredict alone its pick earns
+  a little trust (×1.33), but the gain is within noise (top-1 +0.9 points, −0.1 to +2.2), and the code
+  facts take most of it away.
+- **More context makes Jev's pick less useful, not more.** The basics and the score change nothing:
+  Jev knows how the game works. With the player's earlier positions it goes back to the last sighting
+  (58%), and the model's trust in its pick falls to ×1.02.
+- **Players' habits are a weak signal for this question.** Even in code, "where this player was first
+  seen most often in earlier rounds" names the right callout only 15.8% of the time. Pros repeat their
+  setups, but these moments come after first contact, when where a player is depends on how this round
+  has gone.
+- **The no-Jev control found something.** Re-weighting the code facts on top of cspredict improves its
+  log-loss by 0.034 on validation. It is not part of cspredict: adopting it would mean building it into
+  the model and refreshing every published number, for a gain of about 2%. It is also measured only on
+  validation, where cspredict's own calibration was fitted.
+- **Cost:** $0.81 for all four tests (6,300 requests, 0 failures; the existing answers were already cached).
+
+Reproduce with `pip install -e ".[bench]"` and `TYPESAFE_API_KEY` in the environment or `.env`, then:
+
+```bash
+python -m cspredict.jev_features --n 300     # feature questions (pilot) and the existing answers
+python -m cspredict.jev_features --roleplay
+python -m cspredict.jev_features --context
+```
+
+Answers are cached in `outputs/jev_features/`, and re-running only sends what is missing.
+
 ## First benchmark (the model before fires, team coordination and calibration)
 
 *Historical: these numbers come from an older model and from the old tie rule, which counted ties

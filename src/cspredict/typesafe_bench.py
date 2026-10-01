@@ -176,8 +176,8 @@ def _load_cache(path: Path) -> dict[str, dict]:
 
 async def _ask(requests: dict[str, dict], cache_path: Path, concurrency: int, per_second: float, model: str | None = None) -> None:
     """Send the requests not answered yet and append the answers to cache_path. A question is
-    {"type": "choice" | "noul", "instructions": ..., "criteria": ...}; `model` pins a Jev version."""
-    from typesafe_sdk import AsyncTypeSafeClient, Choice, Noul, RetryPolicy
+    {"type": "choice" | "noul" | "score", "instructions": ..., "criteria": ...}; `model` pins a Jev version."""
+    from typesafe_sdk import AsyncTypeSafeClient, Choice, Noul, RetryPolicy, Score
 
     todo = [k for k in requests if k not in _load_cache(cache_path)]
     logger.info(f"{len(requests) - len(todo)} requests cached, {len(todo)} to send")
@@ -198,7 +198,7 @@ async def _ask(requests: dict[str, dict], cache_path: Path, concurrency: int, pe
                         await asyncio.sleep(wait)
                     req = requests[key]
                     questions = {
-                        label: (Noul if q.get("type") == "noul" else Choice)(instructions=q["instructions"], criteria=q["criteria"])
+                        label: {"noul": Noul, "score": Score}.get(q.get("type"), Choice)(instructions=q["instructions"], criteria=q["criteria"])
                         for label, q in req["questions"].items()
                     }
                     try:
@@ -211,6 +211,7 @@ async def _ask(requests: dict[str, dict], cache_path: Path, concurrency: int, pe
                         return
                     answers = {
                         label: {"noul": a.noul} if a.type == "noul"
+                        else {"score": a.score, "probabilities": a.probabilities, "confidence": a.confidence} if a.type == "score"
                         else {"probabilities": a.probabilities, "choice": a.choice, "confidence": a.confidence}
                         for label, a in resp.answers.items()
                     }
